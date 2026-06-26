@@ -27,9 +27,9 @@ struct GMTokenService {
 
     func randomState() -> String { Self.randomString(32) }
 
-    func authorizeURL(challenge: String, state: String) -> URL {
+    func authorizeURL(challenge: String, state: String, loginHint: String? = nil) -> URL {
         var comps = URLComponents(string: GMAPI.b2cAuthorizeBase + "/authorize")!
-        comps.queryItems = [
+        var items: [URLQueryItem] = [
             .init(name: "client_id", value: GMAPI.clientId),
             .init(name: "response_type", value: "code"),
             .init(name: "redirect_uri", value: GMAPI.redirectURI),
@@ -37,8 +37,21 @@ struct GMTokenService {
             .init(name: "code_challenge", value: challenge),
             .init(name: "code_challenge_method", value: "S256"),
             .init(name: "state", value: state),
-            .init(name: "response_mode", value: "query")
+            .init(name: "response_mode", value: "query"),
+            // Extra params the MyChevrolet app sends so the B2C policy themes and
+            // routes the page correctly (mirrors OnStarJS).
+            .init(name: "bundleID", value: "com.gm.myChevrolet"),
+            .init(name: "brand", value: "chevrolet"),
+            .init(name: "channel", value: "lightreg"),
+            .init(name: "ui_locales", value: "en-US"),
+            .init(name: "mode", value: "dark"),
+            .init(name: "evar25",
+                  value: "mobile_mychevrolet_chevrolet_us_app_launcher_sign_in_or_create_account")
         ]
+        if let loginHint, !loginHint.isEmpty {
+            items.append(.init(name: "login_hint", value: loginHint))
+        }
+        comps.queryItems = items
         return comps.url!
     }
 

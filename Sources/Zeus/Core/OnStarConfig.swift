@@ -27,11 +27,13 @@ struct OnStarConfig: Codable, Equatable {
     /// The OnStar PIN used to authorize remote commands (kept in Keychain).
     var commandPIN: String?
 
-    static func makeNew(email: String, password: String, vin: String, totpSecret: String) -> OnStarConfig {
+    /// Build a config for the browser-based login. Password and MFA are entered
+    /// by the user in GM's official auth sheet, so they aren't stored here.
+    static func makeNew(email: String, vin: String) -> OnStarConfig {
         OnStarConfig(email: email,
-                     password: password,
+                     password: "",
                      vin: vin.uppercased(),
-                     totpSecret: totpSecret.replacingOccurrences(of: " ", with: "").uppercased(),
+                     totpSecret: "",
                      deviceId: UUID().uuidString,
                      commandPIN: nil)
     }

@@ -38,8 +38,8 @@ final class VehicleManager: ObservableObject {
         }
     }
 
-    func saveConfig(email: String, password: String, vin: String, totpSecret: String) throws {
-        let cfg = OnStarConfig.makeNew(email: email, password: password, vin: vin, totpSecret: totpSecret)
+    func saveConfig(email: String, vin: String) throws {
+        let cfg = OnStarConfig.makeNew(email: email, vin: vin)
         try KeychainStore.save(cfg, for: .onStarConfig)
         self.config = cfg
         AppGroup.defaults.set(cfg.vin, forKey: SharedKey.selectedVIN)
@@ -58,8 +58,10 @@ final class VehicleManager: ObservableObject {
             return
         }
         do {
-            // Drive GM's B2C + TOTP login on-device; persist the resulting token.
-            try await service.signIn(using: { try await GMAuth(config: cfg).authenticate() })
+            // Drive GM's B2C login on-device in Apple's real WebKit auth sheet
+            // (clears Akamai's bot-wall), then persist the resulting token.
+            let auth = GMAuthSession(config: cfg)
+            try await service.signIn(using: { try await auth.authenticate() })
             isAuthenticated = true
             await loadVehicles()
             await refresh()

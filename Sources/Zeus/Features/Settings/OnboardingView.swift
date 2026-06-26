@@ -5,9 +5,7 @@ import SwiftUI
 struct OnboardingView: View {
     @EnvironmentObject private var vehicle: VehicleManager
     @State private var email = ""
-    @State private var password = ""
     @State private var vin = ""
-    @State private var totpSecret = ""
     @State private var signingIn = false
 
     var body: some View {
@@ -37,10 +35,7 @@ struct OnboardingView: View {
                             field("OnStar Email", text: $email, icon: "envelope.fill")
                                 .keyboardType(.emailAddress)
                                 .textInputAutocapitalization(.never)
-                            secureField("Password", text: $password, icon: "lock.fill")
                             field("VIN", text: $vin, icon: "number")
-                                .textInputAutocapitalization(.characters)
-                            secureField("TOTP Secret (authenticator key)", text: $totpSecret, icon: "key.fill")
                                 .textInputAutocapitalization(.characters)
 
                             Button {
@@ -49,7 +44,7 @@ struct OnboardingView: View {
                                 if signingIn {
                                     ProgressView().tint(.white)
                                 } else {
-                                    Label("Link OnStar Account", systemImage: "link")
+                                    Label("Sign in with OnStar", systemImage: "link")
                                 }
                             }
                             .buttonStyle(GlossyButtonStyle())
@@ -58,7 +53,7 @@ struct OnboardingView: View {
                         }
                     }
 
-                    Text("Zeus signs in to OnStar on-device using your account and the TOTP key from your authenticator-app MFA. Credentials are stored only in your iPhone's Keychain. Unofficial; for personal use with your own vehicle.")
+                    Text("Tapping Sign in opens GM's official OnStar login on-device. Sign in there with your email, password, and MFA — Zeus never sees your password. Unofficial; for personal use with your own vehicle.")
                         .font(.aeroCaption)
                         .foregroundStyle(Aero.textTertiary)
                         .multilineTextAlignment(.center)
@@ -76,9 +71,7 @@ struct OnboardingView: View {
 
     private var canSubmit: Bool {
         email.contains("@")
-            && !password.isEmpty
             && vin.trimmingCharacters(in: .whitespaces).count == 17
-            && totpSecret.trimmingCharacters(in: .whitespaces).count >= 16
     }
 
     private func start() {
@@ -86,9 +79,7 @@ struct OnboardingView: View {
         Task {
             do {
                 try vehicle.saveConfig(email: email.trimmingCharacters(in: .whitespaces),
-                                       password: password,
-                                       vin: vin.trimmingCharacters(in: .whitespaces),
-                                       totpSecret: totpSecret)
+                                       vin: vin.trimmingCharacters(in: .whitespaces))
             } catch { }
             await vehicle.signIn()
             signingIn = false
@@ -99,18 +90,6 @@ struct OnboardingView: View {
         HStack(spacing: 12) {
             Image(systemName: icon).foregroundStyle(Aero.bolt).frame(width: 22)
             TextField("", text: text, prompt: Text(placeholder).foregroundColor(Aero.textTertiary))
-                .foregroundStyle(.white)
-                .autocorrectionDisabled()
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.15)))
-    }
-
-    private func secureField(_ placeholder: String, text: Binding<String>, icon: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).foregroundStyle(Aero.bolt).frame(width: 22)
-            SecureField("", text: text, prompt: Text(placeholder).foregroundColor(Aero.textTertiary))
                 .foregroundStyle(.white)
                 .autocorrectionDisabled()
         }
