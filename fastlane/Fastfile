@@ -52,7 +52,6 @@ platform :ios do
       export_method: "app-store",
       output_directory: "build",
       clean: true,
-      api_key: api_key,
       xcargs: "-allowProvisioningUpdates",
       export_options: {
         signingStyle: "automatic",
