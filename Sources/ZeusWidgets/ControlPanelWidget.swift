@@ -39,26 +39,32 @@ struct ControlPanelView: View {
             }
 
             VStack(spacing: 10) {
-                Button(intent: snap.climateOn ? StopVehicleIntent() : StartVehicleIntent()) {
-                    Label(snap.climateOn ? "Stop" : "Start",
-                          systemImage: snap.climateOn ? "stop.fill" : "power")
-                        .font(.aero(15, weight: .bold))
-                        .frame(maxWidth: .infinity)
+                if snap.climateOn {
+                    Button(intent: StopVehicleIntent()) {
+                        buttonLabel("Stop", "stop.fill")
+                    }
+                    .tint(Aero.flare)
+                } else {
+                    Button(intent: StartVehicleIntent()) {
+                        buttonLabel("Start", "power")
+                    }
+                    .tint(Aero.bolt)
                 }
-                .tint(snap.climateOn ? Aero.flare : Aero.bolt)
 
-                Button(intent: snap.locked ? UnlockVehicleIntent() : LockVehicleIntent()) {
-                    Label(snap.locked ? "Unlock" : "Lock",
-                          systemImage: snap.locked ? "lock.open.fill" : "lock.fill")
-                        .font(.aero(15, weight: .bold))
-                        .frame(maxWidth: .infinity)
+                if snap.locked {
+                    Button(intent: UnlockVehicleIntent()) {
+                        buttonLabel("Unlock", "lock.open.fill")
+                    }
+                    .tint(Aero.ember)
+                } else {
+                    Button(intent: LockVehicleIntent()) {
+                        buttonLabel("Lock", "lock.fill")
+                    }
+                    .tint(Aero.aurora)
                 }
-                .tint(snap.locked ? Aero.ember : Aero.aurora)
 
                 Button(intent: ChargeNowIntent()) {
-                    Label("Charge", systemImage: "bolt.fill")
-                        .font(.aero(15, weight: .bold))
-                        .frame(maxWidth: .infinity)
+                    buttonLabel("Charge", "bolt.fill")
                 }
                 .tint(Aero.aurora)
             }
@@ -66,5 +72,11 @@ struct ControlPanelView: View {
             .controlSize(.small)
         }
         .padding(8)
+    }
+
+    private func buttonLabel(_ title: String, _ image: String) -> some View {
+        Label(title, systemImage: image)
+            .font(.aero(15, weight: .bold))
+            .frame(maxWidth: .infinity)
     }
 }
