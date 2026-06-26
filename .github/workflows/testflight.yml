@@ -17,6 +17,7 @@ on:
   push:
     branches:
       - main
+      - claude/chevy-bolt-ios-app-dzwfgb
     tags:
       - "v*"
 
