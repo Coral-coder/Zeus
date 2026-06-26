@@ -23,6 +23,11 @@ final class GMAuth: NSObject {
         cfg.httpShouldSetCookies = true
         cfg.httpCookieAcceptPolicy = .always   // carry B2C's x-ms-cpim-* cookies across steps
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Consistent browser-like UA on every request so GM's edge/WAF doesn't
+        // block the credential POST.
+        cfg.httpAdditionalHeaders = [
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+        ]
         return URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
     }()
 
@@ -88,6 +93,10 @@ final class GMAuth: NSObject {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.setValue(settings.csrf, forHTTPHeaderField: "X-CSRF-TOKEN")
         req.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        req.setValue("application/json, text/javascript, */*; q=0.01", forHTTPHeaderField: "Accept")
+        req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        req.setValue("https://custlogin.gm.com", forHTTPHeaderField: "Origin")
+        if let referer = refererURL { req.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
         req.httpBody = Self.form(body)
         let (data, http) = try await send(req, step: step)
         // SelfAsserted returns JSON like {"status":"200"}; anything else is a failure.
@@ -130,12 +139,19 @@ final class GMAuth: NSObject {
 
     // MARK: - HTTP
 
+    /// The page the form lives on, used as Referer for the POST (B2C/WAF expects it).
+    private var refererURL: URL?
+
     @discardableResult
     private func get(_ url: URL, step: String) async throws -> (Data, HTTPURLResponse) {
         var req = URLRequest(url: url)
-        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
                      forHTTPHeaderField: "User-Agent")
-        return try await send(req, step: step)
+        req.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        let result = try await send(req, step: step)
+        refererURL = url    // subsequent POSTs reference the page they came from
+        return result
     }
 
     private func send(_ request: URLRequest, step: String) async throws -> (Data, HTTPURLResponse) {
