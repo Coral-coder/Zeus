@@ -1,5 +1,4 @@
 require "base64"
-require "tmpdir"
 
 default_platform(:ios)
 
@@ -9,46 +8,45 @@ PROJECT   = "Zeus.xcodeproj"
 SCHEME    = "Zeus"
 
 platform :ios do
-  desc "Build and upload a TestFlight build (automatic signing via ASC API key)"
+  desc "Build and upload a TestFlight build (manual signing via ASC API key)"
   lane :beta do
     # Creates a temporary CI keychain when running on CI (no-op locally).
     setup_ci
 
     # Accept ASC_KEY_CONTENT as either the raw .p8 (PEM) text or base64 of it.
-    key_id    = ENV.fetch("ASC_KEY_ID")
-    issuer_id = ENV.fetch("ASC_ISSUER_ID")
-    raw_key   = ENV.fetch("ASC_KEY_CONTENT").strip
-    key_pem   = raw_key.include?("BEGIN") ? raw_key : Base64.decode64(raw_key)
-
-    app_store_connect_api_key(
-      key_id: key_id,
-      issuer_id: issuer_id,
+    raw_key = ENV.fetch("ASC_KEY_CONTENT").strip
+    key_pem = raw_key.include?("BEGIN") ? raw_key : Base64.decode64(raw_key)
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
       key_content: key_pem,
       is_key_content_base64: false
     )
-
-    # xcodebuild needs the API key on disk to authenticate cloud signing
-    # (-allowProvisioningUpdates), so it can create the distribution cert +
-    # profiles itself with no Apple ID logged in on the runner.
-    key_path = File.join(Dir.tmpdir, "AuthKey_#{key_id}.p8")
-    File.write(key_path, key_pem)
-    auth_xcargs = "-allowProvisioningUpdates " \
-                  "-authenticationKeyPath #{key_path} " \
-                  "-authenticationKeyID #{key_id} " \
-                  "-authenticationKeyIssuerID #{issuer_id}"
+    team_id = ENV.fetch("TEAM_ID")
 
     # Generate the Xcode project from project.yml (kept out of git).
     sh("cd .. && xcodegen generate")
 
-    # Use Xcode automatic signing; Apple manages the cert + profiles via the API
-    # key during -allowProvisioningUpdates, so no certs repo / match is needed.
-    team_id = ENV.fetch("TEAM_ID")
-    ["Zeus", "ZeusWidgets"].each do |target|
+    # CI runners have no Apple ID, so automatic signing can't resolve the team.
+    # Instead, use the API key to create/download a distribution certificate and
+    # App Store provisioning profiles directly, then sign manually against them.
+    get_certificates(api_key: api_key, generate_apple_certs: true)
+
+    get_provisioning_profile(api_key: api_key, app_identifier: APP_ID)
+    name_app = lane_context[SharedValues::SIGH_NAME]
+
+    get_provisioning_profile(api_key: api_key, app_identifier: WIDGET_ID)
+    name_widget = lane_context[SharedValues::SIGH_NAME]
+
+    [["Zeus", APP_ID, name_app], ["ZeusWidgets", WIDGET_ID, name_widget]].each do |target, bundle_id, profile|
       update_code_signing_settings(
         path: PROJECT,
-        use_automatic_signing: true,
+        use_automatic_signing: false,
         team_id: team_id,
-        targets: [target]
+        targets: [target],
+        bundle_identifier: bundle_id,
+        code_sign_identity: "Apple Distribution",
+        profile_name: profile
       )
     end
 
@@ -66,10 +64,12 @@ platform :ios do
       export_method: "app-store",
       output_directory: "build",
       clean: true,
-      xcargs: auth_xcargs,
       export_options: {
-        signingStyle: "automatic",
-        teamID: team_id
+        signingStyle: "manual",
+        provisioningProfiles: {
+          APP_ID => name_app,
+          WIDGET_ID => name_widget
+        }
       }
     )
 
