@@ -12,6 +12,11 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     VERSIONING_SYSTEM: "apple-generic"
     SWIFT_VERSION: "5.10"
+    # Skip the App Intents SSU "flexible matching" training pass, which fails in
+    # archive on the CI toolchain ("AppIntentsSSUTraining ... Unable to parse
+    # Info.plist"). Siri/App Shortcuts still work; this only disables on-device
+    # fuzzy phrase matching training.
+    ENABLE_APP_SHORTCUTS_FLEXIBLE_MATCHING: "NO"
     DEVELOPMENT_TEAM: "" # <- set your Apple Developer Team ID
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
