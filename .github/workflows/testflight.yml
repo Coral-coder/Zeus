@@ -88,5 +88,24 @@ jobs:
           echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
           echo "SIGNING_KEYCHAIN_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
 
+      - name: Neutralize App Intents SSU training (toolchain bug on Xcode 26.x)
+        # appintentsnltrainingprocessor fails with "Unable to parse Info.plist"
+        # regardless of plist contents on this toolchain. It only builds Spotlight
+        # SSU search-suggestion assets — App Intents *metadata* (what Siri needs)
+        # is produced by a different tool and is untouched. Stub it to a no-op so
+        # the archive completes with all features intact.
+        run: |
+          set -euo pipefail
+          TC="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          SSU="$TC/appintentsnltrainingprocessor"
+          if [ -f "$SSU" ]; then
+            sudo mv "$SSU" "$SSU.real"
+            printf '#!/bin/bash\nexit 0\n' | sudo tee "$SSU" >/dev/null
+            sudo chmod +x "$SSU"
+            echo "Stubbed appintentsnltrainingprocessor (SSU training) to no-op."
+          else
+            echo "appintentsnltrainingprocessor not found — nothing to stub."
+          fi
+
       - name: Build & upload to TestFlight
         run: bundle exec fastlane ios beta
