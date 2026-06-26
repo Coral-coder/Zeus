@@ -83,6 +83,15 @@ final class OBDManager: NSObject, ObservableObject {
         CBUUID(string: "FFF0"), CBUUID(string: "FFE0"),
         CBUUID(string: "FFE1"), CBUUID(string: "18F0")
     ]
+    /// Characteristic UUIDs known to carry ELM327 traffic on common clones.
+    private static let knownChars: Set<CBUUID> = [
+        CBUUID(string: "FFE1"), CBUUID(string: "FFF1"), CBUUID(string: "FFF2"),
+        CBUUID(string: "2AF0"), CBUUID(string: "2AF1")
+    ]
+
+    private var initStarted = false
+    private var receivedBytes = false
+    private var watchdog: Timer?
     private var writeChar: CBCharacteristic?
     private var notifyChar: CBCharacteristic?
     private var writeType: CBCharacteristicWriteType = .withResponse
@@ -166,6 +175,14 @@ final class OBDManager: NSObject, ObservableObject {
             ?? central.retrievePeripherals(withIdentifiers: [device.id]).first
         guard let p else { return }
         central.stopScan()
+        // Reset per-connection state.
+        initStarted = false
+        receivedBytes = false
+        writeChar = nil
+        notifyChar = nil
+        commandQueue = []
+        pending = nil
+        buffer = ""
         peripheral = p
         p.delegate = self
         phase = .connecting(device.name)
@@ -174,12 +191,17 @@ final class OBDManager: NSObject, ObservableObject {
 
     func disconnect() {
         pollTimer?.invalidate(); pollTimer = nil
+        watchdog?.invalidate(); watchdog = nil
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
         readings = [:]
         unsupported = []
         commandQueue = []
         pending = nil
         buffer = ""
+        initStarted = false
+        receivedBytes = false
+        writeChar = nil
+        notifyChar = nil
         phase = .idle
     }
 
@@ -222,6 +244,7 @@ final class OBDManager: NSObject, ObservableObject {
     }
 
     private func beginPolling() {
+        watchdog?.invalidate(); watchdog = nil
         phase = .live
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -329,6 +352,7 @@ extension OBDManager: CBCentralManagerDelegate, CBPeripheralDelegate {
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
             phase = .initializing
+            armWatchdog()
             peripheral.discoverServices(nil)
         }
     }
@@ -357,19 +381,60 @@ extension OBDManager: CBCentralManagerDelegate, CBPeripheralDelegate {
         Task { @MainActor in
             for char in service.characteristics ?? [] {
                 let props = char.properties
+                let known = Self.knownChars.contains(char.uuid)
+
+                // Notify endpoint: take a known char outright, else the first one.
                 if props.contains(.notify) || props.contains(.indicate) {
-                    notifyChar = char
-                    peripheral.setNotifyValue(true, for: char)
+                    if notifyChar == nil || known {
+                        notifyChar = char
+                        peripheral.setNotifyValue(true, for: char)
+                    }
                 }
-                if props.contains(.writeWithoutResponse) {
-                    writeChar = char; writeType = .withoutResponse
-                } else if props.contains(.write), writeChar == nil {
-                    writeChar = char; writeType = .withResponse
+                // Write endpoint: prefer writeWithoutResponse / known chars.
+                if props.contains(.writeWithoutResponse) || props.contains(.write) {
+                    let preferNoResponse = props.contains(.writeWithoutResponse)
+                    if writeChar == nil || known {
+                        writeChar = char
+                        writeType = preferNoResponse ? .withoutResponse : .withResponse
+                    }
                 }
             }
-            // Once we have both endpoints, kick off the ELM327 handshake (once).
-            if writeChar != nil, notifyChar != nil, pending == nil, commandQueue.isEmpty {
-                runInitThenPoll()
+            armWatchdog()
+            // Fallback: if the notify-enabled callback never fires, start anyway.
+            if writeChar != nil, notifyChar != nil, !initStarted {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    Task { @MainActor in self?.startInitIfReady() }
+                }
+            }
+        }
+    }
+
+    /// Called when notifications are actually enabled — only now is it safe to
+    /// send commands and expect replies.
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        Task { @MainActor in
+            if characteristic.isNotifying { startInitIfReady() }
+        }
+    }
+
+    private func startInitIfReady() {
+        guard !initStarted, writeChar != nil, notifyChar != nil else { return }
+        initStarted = true
+        runInitThenPoll()
+    }
+
+    /// If we can't reach a live state in time, stop spinning and explain.
+    private func armWatchdog() {
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if case .live = self.phase { return }
+                let gotBytes = self.receivedBytes
+                self.disconnect()
+                self.phase = .failed(gotBytes
+                    ? "Adapter connected but isn't answering OBD-II. Turn the car to ON/Ready and try again."
+                    : "Connected, but no data from the adapter. It may be a non-OBD device or need its PIN — try another adapter.")
             }
         }
     }
@@ -378,6 +443,7 @@ extension OBDManager: CBCentralManagerDelegate, CBPeripheralDelegate {
         guard let data = characteristic.value,
               let text = String(data: data, encoding: .ascii) else { return }
         Task { @MainActor in
+            receivedBytes = true
             buffer += text
             if buffer.contains(">") { completePending() }
         }
