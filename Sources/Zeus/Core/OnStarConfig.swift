@@ -67,11 +67,29 @@ enum GMAPI {
     /// GM API token exchange endpoint (MS token -> GM API JWT).
     static var gmTokenURL: URL { apiHost.appendingPathComponent("sec/authz/v3/oauth/token") }
 
-    static func vehiclesURL() -> URL {
-        apiHost.appendingPathComponent("api/v1/account/vehicles")
+    /// GraphQL "garage" endpoint that lists the account's vehicles.
+    static var garageURL: URL { apiHost.appendingPathComponent("mbff/garage/v1") }
+
+    /// Vehicle health-status (diagnostics) endpoint.
+    static func healthStatusURL(vin: String) -> URL {
+        apiHost.appendingPathComponent("api/v1/vh/vehiclehealth/v1/healthstatus/\(vin)")
     }
 
     static func commandURL(vin: String, command: String) -> URL {
         apiHost.appendingPathComponent("api/v1/account/vehicles/\(vin)/commands/\(command)")
     }
+
+    /// The GraphQL query the mobile app sends to list vehicles.
+    static let garageQuery =
+        "query getVehiclesMBFF { vehicles { vin vehicleId make model nickName year imageUrl onstarCapable vehicleType roleCode } }"
+
+    /// Common headers GM's mobile API expects on every authed request.
+    static let commonHeaders: [String: String] = [
+        "accept": "application/json",
+        "accept-language": "en-US",
+        "appversion": "myOwner-chevrolet-android-8.5.0-0",
+        "locale": "en-US",
+        "user-agent": "myOwner App",
+        "push-request": "allow"
+    ]
 }

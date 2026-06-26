@@ -88,54 +88,128 @@ enum CommandPoll {
 enum VehicleResponseParser {
 
     static func parseVehicles(_ data: Data) throws -> [Vehicle] {
-        guard
-            let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let vehicles = (root["vehicles"] as? [String: Any])?["vehicle"] as? [[String: Any]]
-        else {
-            throw OnStarError.decoding("Unexpected vehicles payload.")
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw OnStarError.decoding("Vehicles: " + snippet(data))
         }
-        return vehicles.compactMap { v in
-            guard let vin = v["vin"] as? String else { return nil }
-            let year = Int((v["year"] as? String) ?? "") ?? (v["year"] as? Int ?? 0)
+        // New GraphQL garage shape: { data: { vehicles: [ … ] } }.
+        // Legacy shape: { vehicles: { vehicle: [ … ] } }.
+        let list = ((root["data"] as? [String: Any])?["vehicles"] as? [[String: Any]])
+            ?? ((root["vehicles"] as? [String: Any])?["vehicle"] as? [[String: Any]])
+            ?? (root["vehicles"] as? [[String: Any]])
+            ?? []
+
+        let vehicles = list.compactMap { v -> Vehicle? in
+            guard let vin = v["vin"] as? String, !vin.isEmpty else { return nil }
+            let year: Int = (v["year"] as? Int)
+                ?? Int((v["year"] as? String) ?? "")
+                ?? 0
             return Vehicle(
                 vin: vin,
                 make: (v["make"] as? String) ?? "Chevrolet",
                 model: (v["model"] as? String) ?? "Bolt EV",
                 year: year,
-                nickname: v["nickname"] as? String
+                nickname: (v["nickName"] as? String) ?? (v["nickname"] as? String)
             )
         }
+
+        if vehicles.isEmpty {
+            if let errors = root["errors"] as? [[String: Any]],
+               let msg = errors.first?["message"] as? String {
+                throw OnStarError.decoding("Vehicles: \(msg)")
+            }
+            throw OnStarError.decoding("No vehicles on the account.")
+        }
+        return vehicles
     }
 
-    /// Map a diagnostics command payload into a `VehicleSnapshot`.
-    static func parseSnapshot(_ data: Data, vin: String) throws -> VehicleSnapshot {
-        let items = diagnosticElements(in: data)
-
-        func el(_ name: String) -> Element? {
-            items.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    /// Parse GM's vehicle health-status payload into a `VehicleSnapshot`. The
+    /// response is a tree of `diagnostics[]`, each optionally carrying a value
+    /// and nested `diagnosticElements[]` (e.g. the four tire pressures).
+    static func parseHealthStatus(_ data: Data, vin: String) throws -> VehicleSnapshot {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw OnStarError.decoding("Health: " + snippet(data))
         }
-        func value(_ name: String) -> Double? { el(name)?.value }
-        func string(_ name: String) -> String? { el(name)?.message ?? el(name)?.rawValue }
+        var items: [Element] = []
+        func ingest(_ d: [String: Any]) {
+            let name = (d["displayName"] as? String) ?? (d["name"] as? String) ?? ""
+            guard !name.isEmpty else { return }
+            let valAny = d["value"]
+            let valStr = (valAny as? String) ?? (valAny as? NSNumber)?.stringValue
+            let unit = (d["uom"] as? String) ?? (d["unit"] as? String)
+            let status = (d["message"] as? String) ?? (d["status"] as? String)
+            // Only keep entries that carry a value or a meaningful status.
+            if valStr != nil || (status != nil && status?.isEmpty == false) {
+                items.append(Element(name: name,
+                                     value: valStr.flatMap { Double($0) },
+                                     unit: unit,
+                                     message: status,
+                                     rawValue: valStr))
+            }
+        }
+        let diagnostics = (root["diagnostics"] as? [[String: Any]]) ?? []
+        for diag in diagnostics {
+            ingest(diag)
+            for el in (diag["diagnosticElements"] as? [[String: Any]]) ?? [] { ingest(el) }
+        }
+        return makeSnapshot(from: items, vin: vin)
+    }
 
-        let battery = (value("EV BATTERY LEVEL") ?? 0) / 100.0
-        let plugState = string("EV PLUG STATE")?.lowercased() ?? ""
-        let chargeState = string("EV CHARGE STATE")?.lowercased() ?? ""
+    /// Map a (legacy) diagnostics command payload into a `VehicleSnapshot`.
+    static func parseSnapshot(_ data: Data, vin: String) throws -> VehicleSnapshot {
+        return makeSnapshot(from: diagnosticElements(in: data), vin: vin)
+    }
 
-        // Per-corner tire pressures (GM reports them as separate elements, kPa).
+    /// Shared mapping: turn a flat list of diagnostic elements into a snapshot.
+    /// Matching is keyword-based and unit-aware so it works across both the
+    /// legacy command payload and the health-status tree, in metric or US units.
+    private static func makeSnapshot(from items: [Element], vin: String) -> VehicleSnapshot {
+        // First element whose name contains all the given keywords.
+        func find(_ keywords: [String]) -> Element? {
+            items.first { e in
+                let n = e.name.uppercased()
+                return keywords.allSatisfy { n.contains($0) }
+            }
+        }
+        func firstFind(_ groups: [[String]]) -> Element? {
+            for g in groups { if let e = find(g) { return e } }
+            return nil
+        }
+        func text(_ e: Element?) -> String { (e?.message ?? e?.rawValue ?? "").lowercased() }
+        func miles(_ e: Element?) -> Int? {
+            guard let v = e?.value else { return nil }
+            let u = (e?.unit ?? "").uppercased()
+            return u.contains("KM") ? Int((v * 0.621371).rounded()) : Int(v.rounded())
+        }
+
+        // Battery %: value is 0–100 (sometimes 0–1).
+        let batteryRaw = firstFind([["BATTERY", "LEVEL"], ["STATE", "CHARGE"], ["SOC"], ["BATTERY"]])?.value ?? 0
+        let battery = batteryRaw > 1 ? batteryRaw / 100.0 : batteryRaw
+
+        let plugState = text(firstFind([["PLUG"], ["CONNECTOR"]]))
+        let chargeState = text(firstFind([["CHARGE", "STATE"], ["CHARGING", "STATUS"], ["CHARGING"]]))
+
+        // Per-corner tire pressures, unit-aware (kPa / bar / psi).
         var tires: [String: Double] = [:]
         for (corner, names) in Self.tireCorners {
-            if let kpa = items.first(where: { Self.matchesTire($0.name, names) })?.value {
-                tires[corner] = (kpa * 0.1450377).rounded()   // kPa → psi
+            if let e = items.first(where: { Self.matchesTire($0.name, names) }), let v = e.value {
+                let u = (e.unit ?? "").uppercased()
+                if u.contains("KPA") { tires[corner] = (v * 0.1450377).rounded() }
+                else if u.contains("BAR") { tires[corner] = (v * 14.5038).rounded() }
+                else { tires[corner] = v.rounded() }   // assume psi
             }
         }
         let tirePressureOK: Bool? = tires.isEmpty ? nil : tires.values.allSatisfy { $0 >= 30 && $0 <= 42 }
 
-        // Ambient temperature, °C → °F.
-        let cabinF = value("AMBIENT AIR TEMPERATURE").map { Int(($0 * 9/5 + 32).rounded()) }
+        // Ambient temperature, unit-aware.
+        let cabinF: Int? = {
+            guard let e = firstFind([["AMBIENT"], ["CABIN", "TEMP"], ["OUTSIDE", "TEMP"]]),
+                  let v = e.value else { return nil }
+            let u = (e.unit ?? "").uppercased()
+            return u.contains("F") ? Int(v.rounded()) : Int((v * 9/5 + 32).rounded())
+        }()
 
-        // Range comes as EV RANGE (preferred) or VEHICLE RANGE, usually km.
-        let rangeMiles = (value("EV RANGE") ?? value("VEHICLE RANGE")).map { Int(($0 * 0.621371).rounded()) }
-        let odometerMiles = value("ODOMETER").map { Int(($0 * 0.621371).rounded()) }
+        let rangeMiles = miles(firstFind([["EV", "RANGE"], ["ELECTRIC", "RANGE"], ["RANGE"]]))
+        let odometerMiles = miles(find(["ODOMETER"]))
 
         // Build the full display-ready stat list from everything GM returned,
         // excluding tire elements (we synthesize nicer per-corner cards below).
@@ -158,7 +232,7 @@ enum VehicleResponseParser {
             rangeMiles: rangeMiles,
             isCharging: chargeState.contains("charging") || chargeState.contains("active"),
             pluggedIn: plugState.contains("plug") || plugState.contains("connected") || plugState.contains("in"),
-            minutesToFull: value("EV ESTIMATED CHARGE END").map { Int($0) },
+            minutesToFull: firstFind([["CHARGE", "END"], ["TIME", "FULL"]])?.value.map { Int($0) },
             locked: true,
             climateOn: false,
             cabinTempF: cabinF,
@@ -167,8 +241,8 @@ enum VehicleResponseParser {
             latitude: nil,
             longitude: nil,
             updatedAt: Date(),
-            chargerPowerKw: value("CHARGER POWER LEVEL"),
-            voltage12V: value("INTERM VOLT BATT VOLT"),
+            chargerPowerKw: find(["CHARGER", "POWER"])?.value,
+            voltage12V: firstFind([["12", "VOLT"], ["INTERM", "VOLT"], ["ACCESSORY", "VOLT"]])?.value,
             tirePressuresPSI: tires.isEmpty ? nil : tires,
             stats: stats.isEmpty ? nil : stats
         )
