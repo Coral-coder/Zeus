@@ -64,6 +64,12 @@ platform :ios do
       keychain_password: keychain_password
     )
 
+    # Make sure both bundle IDs are registered on the developer portal. The
+    # widget extension's App ID in particular often doesn't exist yet, and sigh
+    # won't auto-create it. skip_itc: only touch the portal, not App Store Connect.
+    produce(api_key: api_key, app_identifier: APP_ID, app_name: "Zeus Remote", skip_itc: true)
+    produce(api_key: api_key, app_identifier: WIDGET_ID, app_name: "Zeus Widgets", skip_itc: true)
+
     get_provisioning_profile(api_key: api_key, app_identifier: APP_ID, development: false, force: true)
     name_app = lane_context[SharedValues::SIGH_NAME]
 
