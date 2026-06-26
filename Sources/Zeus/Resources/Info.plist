@@ -10,23 +10,16 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
-    <!-- App uses only standard HTTPS/TLS (export-exempt). Avoids the per-build
-         TestFlight export-compliance prompt. -->
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UILaunchScreen</key>
-    <dict>
-        <key>UIColorName</key>
-        <string></string>
-    </dict>
+    <dict/>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
-
-    <!-- OnStar OAuth redirect (must match GMAPI.redirectScheme). -->
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -39,8 +32,6 @@
             </array>
         </dict>
     </array>
-
-    <!-- Privacy usage strings. -->
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Zeus uses your location to find nearby chargers and show your car on the map.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -51,8 +42,6 @@
     <string>Zeus uses Face ID to confirm sensitive commands like unlocking and starting your car.</string>
     <key>NSSiriUsageDescription</key>
     <string>Zeus lets you start, stop, lock and check your Bolt with Siri.</string>
-
-    <!-- Background execution for scheduled auto-start, location and OBD. -->
     <key>UIBackgroundModes</key>
     <array>
         <string>fetch</string>
@@ -64,8 +53,6 @@
     <array>
         <string>com.lightwave.zeus.autostart</string>
     </array>
-
-    <!-- CarPlay scene. The default phone scene is managed by the SwiftUI App. -->
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
