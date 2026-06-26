@@ -38,7 +38,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.lightwave.zeus
         INFOPLIST_FILE: Sources/Zeus/Resources/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         CODE_SIGN_ENTITLEMENTS: Sources/Zeus/Resources/Zeus.entitlements
     dependencies:
