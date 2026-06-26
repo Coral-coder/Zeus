@@ -1,0 +1,7 @@
+# fastlane match — fetches shared signing certs/profiles from your certs repo.
+# All sensitive values come from environment variables / CI secrets.
+git_url(ENV["MATCH_GIT_URL"])
+storage_mode("git")
+type("appstore")
+app_identifier(["com.zeus.bolt", "com.zeus.bolt.widgets"])
+readonly(true)

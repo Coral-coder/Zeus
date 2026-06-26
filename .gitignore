@@ -28,5 +28,18 @@ Config/Secrets.plist
 # macOS
 .DS_Store
 
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output/
+fastlane/README.md
+*.ipa
+*.dSYM.zip
+build/
+
+# Ruby
+vendor/bundle/
+.bundle/
+
 # Misc
 *.log

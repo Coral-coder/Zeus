@@ -1,0 +1,4 @@
+# Primary app bundle id. The widget (com.zeus.bolt.widgets) is handled in the
+# Fastfile. Authentication uses an App Store Connect API key (see Fastfile), so
+# apple_id / team_id are not required here.
+app_identifier(ENV["APP_IDENTIFIER"] || "com.zeus.bolt")

@@ -40,30 +40,30 @@ struct ControlPanelView: View {
 
             VStack(spacing: 10) {
                 if snap.climateOn {
-                    Button(intent: StopVehicleIntent()) {
+                    Button(intent: WidgetStopIntent()) {
                         buttonLabel("Stop", "stop.fill")
                     }
                     .tint(Aero.flare)
                 } else {
-                    Button(intent: StartVehicleIntent()) {
+                    Button(intent: WidgetStartIntent()) {
                         buttonLabel("Start", "power")
                     }
                     .tint(Aero.bolt)
                 }
 
                 if snap.locked {
-                    Button(intent: UnlockVehicleIntent()) {
+                    Button(intent: WidgetUnlockIntent()) {
                         buttonLabel("Unlock", "lock.open.fill")
                     }
                     .tint(Aero.ember)
                 } else {
-                    Button(intent: LockVehicleIntent()) {
+                    Button(intent: WidgetLockIntent()) {
                         buttonLabel("Lock", "lock.fill")
                     }
                     .tint(Aero.aurora)
                 }
 
-                Button(intent: ChargeNowIntent()) {
+                Button(intent: WidgetChargeIntent()) {
                     buttonLabel("Charge", "bolt.fill")
                 }
                 .tint(Aero.aurora)

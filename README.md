@@ -121,6 +121,37 @@ On first launch, enter your OnStar email + VIN and complete the secure GM login.
 
 ---
 
+## 🚢 TestFlight CI (no Xcode needed)
+
+`.github/workflows/testflight.yml` builds and uploads a TestFlight build with
+**fastlane** on a macOS runner. Trigger it from the **Actions** tab
+(*Run workflow*) or by pushing a tag like `v0.1.0`. It runs `xcodegen generate`,
+fetches signing assets via **fastlane match**, builds, and uploads.
+
+### Required GitHub Actions secrets
+| Secret | What it is |
+|--------|-----------|
+| `ASC_KEY_ID` | App Store Connect API key ID. |
+| `ASC_ISSUER_ID` | App Store Connect API issuer ID. |
+| `ASC_KEY_CONTENT` | The `.p8` key, **base64-encoded** (`base64 -i AuthKey_XXX.p8 \| pbcopy`). |
+| `TEAM_ID` | Your 10-char Apple Developer Team ID. |
+| `MATCH_GIT_URL` | Git URL of your fastlane **match** certificates repo. |
+| `MATCH_PASSWORD` | The match encryption passphrase. |
+| `MATCH_GIT_BASIC_AUTHORIZATION` | base64 of `username:personal_access_token` for the match repo. |
+
+These are the standard fastlane-match + App Store Connect API secrets — the same
+set you already have in your other repo can be copied over verbatim.
+
+### One-time prerequisites
+- App IDs `com.zeus.bolt` and `com.zeus.bolt.widgets` exist in the portal with
+  the **App Groups** + **Siri** capabilities, and an **App Group**
+  `group.com.zeus.bolt`.
+- The app record exists in App Store Connect (matching `com.zeus.bolt`).
+- Your match repo holds **App Store** distribution certs/profiles for both IDs
+  (run `fastlane match appstore` once locally to seed it).
+
+---
+
 ## ⚠️ Known caveats / next steps
 - **Not yet compiled in Xcode** — first build may surface minor type/availability
   fixes.

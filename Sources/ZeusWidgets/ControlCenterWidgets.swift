@@ -8,7 +8,7 @@ import AppIntents
 struct StartControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "ZeusStartControl") {
-            ControlWidgetButton(action: StartVehicleIntent()) {
+            ControlWidgetButton(action: WidgetStartIntent()) {
                 Label("Start Bolt", systemImage: "power")
             }
         }
@@ -21,7 +21,7 @@ struct StartControl: ControlWidget {
 struct LockControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "ZeusLockControl") {
-            ControlWidgetButton(action: LockVehicleIntent()) {
+            ControlWidgetButton(action: WidgetLockIntent()) {
                 Label("Lock Bolt", systemImage: "lock.fill")
             }
         }
