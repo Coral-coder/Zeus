@@ -44,10 +44,10 @@ struct MainTabView: View {
                 .tabItem { Label("Live", systemImage: "dot.radiowaves.left.and.right") }
             ChargerMapView()
                 .tabItem { Label("Charge", systemImage: "ev.charger.fill") }
+            WeatherRadarView()
+                .tabItem { Label("Radar", systemImage: "cloud.rain.fill") }
             TimersView()
                 .tabItem { Label("Timers", systemImage: "clock.fill") }
-            SettingsView()
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
         }
         .tint(Aero.bolt)
     }

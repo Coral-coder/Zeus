@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject private var vehicle: VehicleManager
+    @State private var showSettings = false
 
     private var snap: VehicleSnapshot { vehicle.snapshot ?? .placeholder() }
 
@@ -46,6 +47,17 @@ struct HomeView: View {
             }
             .refreshable { await vehicle.refresh() }
         }
+        .sheet(isPresented: $showSettings) {
+            NavigationStack {
+                SettingsView()
+                    .environmentObject(vehicle)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showSettings = false }
+                        }
+                    }
+            }
+        }
     }
 
     private var header: some View {
@@ -59,10 +71,17 @@ struct HomeView: View {
                     .foregroundStyle(Aero.textSecondary)
             }
             Spacer()
-            if let updated = vehicle.snapshot?.updatedAt {
-                Text(updated, format: .relative(presentation: .named))
-                    .font(.aeroCaption)
-                    .foregroundStyle(Aero.textTertiary)
+            VStack(alignment: .trailing, spacing: 6) {
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Aero.textSecondary)
+                }
+                if let updated = vehicle.snapshot?.updatedAt {
+                    Text(updated, format: .relative(presentation: .named))
+                        .font(.aeroCaption)
+                        .foregroundStyle(Aero.textTertiary)
+                }
             }
         }
     }
