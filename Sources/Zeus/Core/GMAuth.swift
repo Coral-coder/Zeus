@@ -20,8 +20,8 @@ final class GMAuth: NSObject {
     private(set) var steps: [String] = []
     private lazy var session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.httpCookieStorage = HTTPCookieStorage()
         cfg.httpShouldSetCookies = true
+        cfg.httpCookieAcceptPolicy = .always   // carry B2C's x-ms-cpim-* cookies across steps
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
     }()
@@ -92,7 +92,7 @@ final class GMAuth: NSObject {
             throw fail("SelfAsserted status \(status): \(obj["message"] as? String ?? "")", step: step)
         }
         if http.statusCode != 200 {
-            throw fail("SelfAsserted HTTP \(http.statusCode)", step: step)
+            throw fail("SelfAsserted HTTP \(http.statusCode): \(Self.snippet(data))", step: step)
         }
     }
 
@@ -157,10 +157,19 @@ final class GMAuth: NSObject {
 
         var base: String { "https://custlogin.gm.com\(tenantPath)" }
         var selfAssertedURL: URL? {
-            URL(string: "\(base)/SelfAsserted?tx=\(transId)&p=\(policy)")
+            var c = URLComponents(string: "\(base)/SelfAsserted")
+            c?.queryItems = [.init(name: "tx", value: transId), .init(name: "p", value: policy)]
+            return c?.url
         }
         var confirmedURL: URL? {
-            URL(string: "\(base)/api/CombinedSigninAndSignup/confirmed?rememberMe=false&csrf_token=\(csrf)&tx=\(transId)&p=\(policy)")
+            var c = URLComponents(string: "\(base)/api/CombinedSigninAndSignup/confirmed")
+            c?.queryItems = [
+                .init(name: "rememberMe", value: "false"),
+                .init(name: "csrf_token", value: csrf),
+                .init(name: "tx", value: transId),
+                .init(name: "p", value: policy)
+            ]
+            return c?.url
         }
     }
 
@@ -203,6 +212,15 @@ final class GMAuth: NSObject {
     private func fail(_ message: String, step: String) -> OnStarError {
         let trail = (steps + ["✗ \(step): \(message)"]).joined(separator: " | ")
         return .authFailed(trail)
+    }
+
+    /// First ~240 chars of a response body, whitespace-collapsed — for surfacing
+    /// GM's actual error text in the diagnostic trail.
+    private static func snippet(_ data: Data) -> String {
+        let s = String(decoding: data.prefix(600), as: UTF8.self)
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        return String(s.prefix(240))
     }
 
     private static func form(_ params: [String: String]) -> Data {
