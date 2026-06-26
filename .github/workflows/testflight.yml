@@ -1,6 +1,17 @@
 name: TestFlight
 
-# Manual trigger, or automatically when you push a version tag (e.g. v0.1.0).
+# Builds Zeus with Xcode and uploads to TestFlight via fastlane, using an
+# App Store Connect API key with manual signing (fastlane mints a distribution
+# cert + App Store profiles each run; the Fastfile revokes stale certs first).
+#
+# Trigger: push to main, push a version tag (v*), or run manually.
+#
+# Required GitHub secrets:
+#   ASC_KEY_ID       App Store Connect API key ID
+#   ASC_ISSUER_ID    Issuer ID from the App Store Connect Keys page
+#   ASC_KEY_CONTENT  contents of the .p8 key (raw PEM, or base64)
+# Team ID lives in fastlane/Appfile (not secret).
+
 on:
   workflow_dispatch:
   push:
@@ -9,9 +20,12 @@ on:
     tags:
       - "v*"
 
+# Only one TestFlight build at a time. The Fastfile revokes stale distribution
+# certs at the start of each run, so overlapping builds would revoke each
+# other's signing cert. Serialize to prevent it.
 concurrency:
-  group: testflight-${{ github.ref }}
-  cancel-in-progress: true
+  group: testflight-upload
+  cancel-in-progress: false
 
 jobs:
   beta:
@@ -21,9 +35,6 @@ jobs:
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
-      TEAM_ID: ${{ secrets.TEAM_ID }}
-      # Keep fastlane output quiet & non-interactive.
       FASTLANE_SKIP_UPDATE_CHECK: "1"
       FASTLANE_HIDE_CHANGELOG: "1"
       LC_ALL: en_US.UTF-8
@@ -33,7 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
+      - name: Select newest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
@@ -41,21 +52,41 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Set up Ruby
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
           bundler-cache: true
 
-      - name: Build & upload (fastlane beta)
-        run: bundle exec fastlane beta
+      - name: Write App Store Connect API key
+        env:
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          # Accept either raw PEM (-----BEGIN PRIVATE KEY-----) or a base64 blob.
+          if printf '%s' "$ASC_KEY_CONTENT" | grep -q "BEGIN"; then
+            printf '%s\n' "$ASC_KEY_CONTENT" > "$KEY_PATH"
+          else
+            printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+          fi
+          echo "ASC_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Upload build artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            ~/Library/Logs/gym
-            build
-          if-no-files-found: ignore
+      - name: Create signing keychain
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="ci-build-keychain"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYCHAIN_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Build & upload to TestFlight
+        run: bundle exec fastlane ios beta

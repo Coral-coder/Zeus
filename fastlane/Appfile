@@ -1,4 +1,2 @@
-# Primary app bundle id. The widget (com.lightwave.zeus.widgets) is handled in
-# the Fastfile. Authentication uses an App Store Connect API key (see Fastfile),
-# so apple_id / team_id are not required here.
-app_identifier(ENV["APP_IDENTIFIER"] || "com.lightwave.zeus")
+app_identifier("com.lightwave.zeus")
+team_id("9BQDEVHKJZ")

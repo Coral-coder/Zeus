@@ -1,47 +1,79 @@
-require "base64"
-
 default_platform(:ios)
 
-APP_ID    = "com.lightwave.zeus"
-WIDGET_ID = "com.lightwave.zeus.widgets"
-PROJECT   = "Zeus.xcodeproj"
-SCHEME    = "Zeus"
+APP_ID    = "com.lightwave.zeus".freeze
+WIDGET_ID = "com.lightwave.zeus.widgets".freeze
+PROJECT   = "Zeus.xcodeproj".freeze
+SCHEME    = "Zeus".freeze
 
 platform :ios do
-  desc "Build and upload a TestFlight build (manual signing via ASC API key)"
+  desc "Build and upload to TestFlight (App Store Connect API key + manual signing)"
   lane :beta do
-    # Creates a temporary CI keychain when running on CI (no-op locally).
-    setup_ci
+    key_id    = ENV.fetch("ASC_KEY_ID")
+    issuer_id = ENV.fetch("ASC_ISSUER_ID")
+    key_path  = ENV.fetch("ASC_API_KEY_PATH") # .p8 written to disk by the workflow
+    team_id   = CredentialsManager::AppfileConfig.try_fetch_value(:team_id)
 
-    # Accept ASC_KEY_CONTENT as either the raw .p8 (PEM) text or base64 of it.
-    raw_key = ENV.fetch("ASC_KEY_CONTENT").strip
-    key_pem = raw_key.include?("BEGIN") ? raw_key : Base64.decode64(raw_key)
     api_key = app_store_connect_api_key(
-      key_id: ENV.fetch("ASC_KEY_ID"),
-      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
-      key_content: key_pem,
-      is_key_content_base64: false
+      key_id: key_id,
+      issuer_id: issuer_id,
+      key_filepath: key_path,
+      in_house: false
     )
-    team_id = ENV.fetch("TEAM_ID")
 
-    # Generate the Xcode project from project.yml (kept out of git).
-    sh("cd .. && xcodegen generate")
+    # The workflow creates + unlocks a dedicated keychain (absolute path in
+    # SIGNING_KEYCHAIN) and makes it default, so the downloaded distribution
+    # certificate imports somewhere xcodebuild can actually find it.
+    keychain_name     = ENV.fetch("SIGNING_KEYCHAIN")
+    keychain_password = ENV.fetch("SIGNING_KEYCHAIN_PASSWORD")
 
-    # CI runners have no Apple ID, so automatic signing can't resolve the team.
-    # Instead, use the API key to create/download a distribution certificate and
-    # App Store provisioning profiles directly, then sign manually against them.
-    get_certificates(api_key: api_key, generate_apple_certs: true)
+    # Monotonic build number (last TestFlight build + 1, else the CI run number).
+    latest = begin
+      latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID, initial_build_number: 0)
+    rescue StandardError
+      (ENV["GITHUB_RUN_NUMBER"] || "0").to_i
+    end
+    increment_build_number(xcodeproj: PROJECT, build_number: latest + 1)
 
-    get_provisioning_profile(api_key: api_key, app_identifier: APP_ID)
+    # Apple caps Distribution certificates. Ephemeral runners mint a fresh one
+    # each run (the private key never persists), so we'd hit the cap. Revoke the
+    # stale ones first — their keys are gone so they can't sign, and revoking
+    # does NOT invalidate builds already on TestFlight.
+    require "spaceship"
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      filepath: File.expand_path(key_path)
+    )
+    Spaceship::ConnectAPI::Certificate.all.each do |cert|
+      next unless cert.certificate_type.to_s.include?("DISTRIBUTION")
+
+      UI.message("Revoking stale distribution certificate #{cert.id} (#{cert.certificate_type})")
+      begin
+        cert.delete!
+      rescue StandardError => e
+        UI.important("Could not revoke #{cert.id}: #{e.message}")
+      end
+    end
+
+    # Mint a Distribution certificate into the CI keychain, and an App Store
+    # provisioning profile for each target (app + widget extension).
+    get_certificates(
+      api_key: api_key,
+      development: false,
+      keychain_path: keychain_name,
+      keychain_password: keychain_password
+    )
+
+    get_provisioning_profile(api_key: api_key, app_identifier: APP_ID, development: false, force: true)
     name_app = lane_context[SharedValues::SIGH_NAME]
 
-    get_provisioning_profile(api_key: api_key, app_identifier: WIDGET_ID)
+    get_provisioning_profile(api_key: api_key, app_identifier: WIDGET_ID, development: false, force: true)
     name_widget = lane_context[SharedValues::SIGH_NAME]
 
     [["Zeus", APP_ID, name_app], ["ZeusWidgets", WIDGET_ID, name_widget]].each do |target, bundle_id, profile|
       update_code_signing_settings(
-        path: PROJECT,
         use_automatic_signing: false,
+        path: PROJECT,
         team_id: team_id,
         targets: [target],
         bundle_identifier: bundle_id,
@@ -50,22 +82,15 @@ platform :ios do
       )
     end
 
-    # Build number = last TestFlight build + 1 (falls back to the CI run number).
-    latest = begin
-      latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID, initial_build_number: 0)
-    rescue StandardError
-      (ENV["GITHUB_RUN_NUMBER"] || "0").to_i
-    end
-    increment_build_number(xcodeproj: PROJECT, build_number: latest + 1)
-
     build_app(
+      project: PROJECT,
       scheme: SCHEME,
       configuration: "Release",
       export_method: "app-store",
       output_directory: "build",
-      clean: true,
       export_options: {
         signingStyle: "manual",
+        teamID: team_id,
         provisioningProfiles: {
           APP_ID => name_app,
           WIDGET_ID => name_widget
@@ -75,8 +100,8 @@ platform :ios do
 
     upload_to_testflight(
       api_key: api_key,
-      skip_waiting_for_build_processing: true,
-      distribute_external: false
+      app_identifier: APP_ID,
+      skip_waiting_for_build_processing: true
     )
   end
 end
