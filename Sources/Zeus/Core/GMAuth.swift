@@ -43,10 +43,14 @@ final class GMAuth: NSObject {
         let (pageData, _) = try await get(authorizeURL, step: "authorize")
         var settings = try parseSettings(pageData, step: "authorize")
 
-        // 2. Submit email + password.
+        // 2. Submit email + password. GM's policy labels the email claim
+        //    "Sign in name" but the POST field id varies, so send the common
+        //    variants — the policy ignores ones it doesn't define.
         try await selfAsserted(settings: settings,
                                body: ["request_type": "RESPONSE",
                                       "signInName": config.email,
+                                      "email": config.email,
+                                      "logonIdentifier": config.email,
                                       "password": config.password],
                                step: "password")
 
