@@ -45,6 +45,22 @@ struct ChargerMapView: View {
 
             controls
 
+            if !loading && stations.isEmpty {
+                VStack {
+                    Spacer()
+                    Text(location.current == nil
+                         ? "Waiting for your location…"
+                         : "No chargers found nearby. Pull the location button to retry.")
+                        .font(.aeroCaption)
+                        .foregroundStyle(Aero.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(14)
+                        .aeroGlass(cornerRadius: 18)
+                        .padding()
+                    Spacer()
+                }
+            }
+
             if let selected {
                 VStack {
                     Spacer()

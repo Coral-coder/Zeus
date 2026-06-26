@@ -53,6 +53,22 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Write Secrets.plist (Open Charge Map key)
+        env:
+          OPENCHARGEMAP_KEY: ${{ secrets.OPENCHARGEMAP_KEY }}
+        run: |
+          set -euo pipefail
+          PL="Sources/Zeus/Resources/Secrets.plist"
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+            echo '<plist version="1.0"><dict>'
+            echo '<key>OpenChargeMapKey</key>'
+            printf '<string>%s</string>\n' "${OPENCHARGEMAP_KEY:-}"
+            echo '</dict></plist>'
+          } > "$PL"
+          echo "Secrets.plist written (key present: $([ -n "${OPENCHARGEMAP_KEY:-}" ] && echo yes || echo NO))"
+
       - name: Generate Xcode project
         run: xcodegen generate
 

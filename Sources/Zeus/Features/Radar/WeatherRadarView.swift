@@ -60,6 +60,15 @@ struct WeatherRadarView: View {
     @StateObject private var model = WeatherRadarModel()
     @StateObject private var location = LocationProvider.shared
 
+    private var statusText: String {
+        if model.loading { return "Loading…" }
+        if model.frames.isEmpty { return "No radar data — tap to retry" }
+        if let f = model.current {
+            return f.date.formatted(date: .omitted, time: .shortened) + " · live"
+        }
+        return "\(model.frames.count) frames"
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             RadarMap(urlTemplate: model.currentTemplate,
@@ -67,7 +76,15 @@ struct WeatherRadarView: View {
                 .ignoresSafeArea()
 
             topBar
-            VStack { Spacer(); timeline }
+            VStack {
+                Spacer()
+                Text("Radar shows precipitation only — clear skies look empty.")
+                    .font(.aeroCaption)
+                    .foregroundStyle(Aero.textTertiary)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(.ultraThinMaterial))
+                timeline
+            }
         }
         .onAppear {
             location.requestWhenInUse()
@@ -85,13 +102,17 @@ struct WeatherRadarView: View {
                 Text("WEATHER RADAR")
                     .font(.aero(16, weight: .heavy))
                     .foregroundStyle(.white)
-                if let f = model.current {
-                    Text(f.date, format: .dateTime.hour().minute())
-                        .font(.aeroCaption).foregroundStyle(Aero.textSecondary)
-                }
+                Text(statusText)
+                    .font(.aeroCaption).foregroundStyle(Aero.textSecondary)
             }
             Spacer()
-            if model.loading { ProgressView().tint(Aero.bolt) }
+            if model.loading {
+                ProgressView().tint(Aero.bolt)
+            } else if model.frames.isEmpty {
+                Button { Task { await model.load() } } label: {
+                    Image(systemName: "arrow.clockwise").foregroundStyle(Aero.bolt)
+                }
+            }
         }
         .padding(14)
         .aeroGlass(cornerRadius: 22)
@@ -137,12 +158,13 @@ struct RadarMap: UIViewRepresentable {
         map.delegate = context.coordinator
         map.showsUserLocation = true
         map.pointOfInterestFilter = .excludingAll
-        if #available(iOS 13.0, *) { map.overrideUserInterfaceStyle = .dark }
-        if let center {
-            map.setRegion(MKCoordinateRegion(center: center,
-                                             span: MKCoordinateSpan(latitudeDelta: 3, longitudeDelta: 3)),
-                          animated: false)
-        }
+        map.overrideUserInterfaceStyle = .dark
+        // Center on the user if known, else a wide continental-US view so the
+        // map (and any precipitation) is visible immediately.
+        let start = center ?? CLLocationCoordinate2D(latitude: 39.5, longitude: -98.35)
+        let span = center == nil ? MKCoordinateSpan(latitudeDelta: 30, longitudeDelta: 30)
+                                 : MKCoordinateSpan(latitudeDelta: 3, longitudeDelta: 3)
+        map.setRegion(MKCoordinateRegion(center: start, span: span), animated: false)
         return map
     }
 
@@ -177,7 +199,7 @@ struct RadarMap: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tile = overlay as? MKTileOverlay {
                 let r = MKTileOverlayRenderer(tileOverlay: tile)
-                r.alpha = 0.7
+                r.alpha = 0.85
                 return r
             }
             return MKOverlayRenderer(overlay: overlay)
