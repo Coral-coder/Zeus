@@ -129,6 +129,24 @@ struct GMTokenService {
             let access_token: String
             let refresh_token: String?
             let expires_in: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case access_token, refresh_token, expires_in
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                access_token = try c.decode(String.self, forKey: .access_token)
+                refresh_token = try c.decodeIfPresent(String.self, forKey: .refresh_token)
+                // GM sends expires_in as either a number or a quoted string.
+                if let n = try? c.decodeIfPresent(Int.self, forKey: .expires_in) {
+                    expires_in = n
+                } else if let s = try? c.decodeIfPresent(String.self, forKey: .expires_in) {
+                    expires_in = Int(s)
+                } else {
+                    expires_in = nil
+                }
+            }
         }
         do {
             let gm = try JSONDecoder().decode(GMResponse.self, from: data)
@@ -138,7 +156,7 @@ struct GMTokenService {
                 expiresAt: Date().addingTimeInterval(TimeInterval(gm.expires_in ?? 1800))
             )
         } catch {
-            throw OnStarError.decoding(error.localizedDescription)
+            throw OnStarError.decoding("\(label): \(error.localizedDescription) — body: " + Self.snippet(data))
         }
     }
 
@@ -147,6 +165,12 @@ struct GMTokenService {
     static func queryItem(_ url: URL, _ name: String) -> String? {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == name })?.value
+    }
+
+    /// A short, log-safe excerpt of a response body for error messages.
+    static func snippet(_ data: Data, max: Int = 300) -> String {
+        let s = String(decoding: data, as: UTF8.self)
+        return s.count > max ? String(s.prefix(max)) + "…" : s
     }
 
     private static func codeVerifier() -> String {
