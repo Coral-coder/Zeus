@@ -38,13 +38,6 @@ final class VehicleManager: ObservableObject {
         }
     }
 
-    func saveConfig(email: String, vin: String) throws {
-        let cfg = OnStarConfig.makeNew(email: email, vin: vin)
-        try KeychainStore.save(cfg, for: .onStarConfig)
-        self.config = cfg
-        AppGroup.defaults.set(cfg.vin, forKey: SharedKey.selectedVIN)
-    }
-
     func saveCommandPIN(_ pin: String) {
         guard var cfg = config else { return }
         cfg.commandPIN = pin
@@ -53,9 +46,12 @@ final class VehicleManager: ObservableObject {
     }
 
     func signIn() async {
-        guard let cfg = config else {
-            lastError = OnStarError.notConfigured.localizedDescription
-            return
+        // No fields to fill: ensure we have a config (just a device id) and then
+        // hand off to GM's login. The VIN is read from the account afterwards.
+        let cfg = config ?? OnStarConfig.makeNew(email: "", vin: "")
+        if config == nil {
+            try? KeychainStore.save(cfg, for: .onStarConfig)
+            config = cfg
         }
         do {
             // Drive GM's B2C login on-device in Apple's real WebKit auth sheet
@@ -84,9 +80,22 @@ final class VehicleManager: ObservableObject {
             if selectedVehicle == nil {
                 selectedVehicle = list.first { $0.vin == config?.vin } ?? list.first
             }
+            // Persist the chosen VIN so commands/widgets know which car to target.
+            if let vin = selectedVehicle?.vin, config?.vin != vin {
+                persistVIN(vin)
+            }
         } catch {
             present(error)
         }
+    }
+
+    /// Store the active VIN in the config and the shared App Group.
+    private func persistVIN(_ vin: String) {
+        guard var cfg = config else { return }
+        cfg.vin = vin
+        try? KeychainStore.save(cfg, for: .onStarConfig)
+        config = cfg
+        AppGroup.defaults.set(vin, forKey: SharedKey.selectedVIN)
     }
 
     // MARK: - State refresh

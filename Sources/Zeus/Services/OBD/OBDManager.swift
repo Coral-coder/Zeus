@@ -74,6 +74,15 @@ final class OBDManager: NSObject, ObservableObject {
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
+    /// Strong references to peripherals seen this scan, so connect() is reliable.
+    private var discoveredPeripherals: [UUID: CBPeripheral] = [:]
+
+    /// Service UUIDs commonly advertised by ELM327 BLE clones — used to surface
+    /// adapters that advertise without a readable name.
+    private static let knownOBDServices: Set<CBUUID> = [
+        CBUUID(string: "FFF0"), CBUUID(string: "FFE0"),
+        CBUUID(string: "FFE1"), CBUUID(string: "18F0")
+    ]
     private var writeChar: CBCharacteristic?
     private var notifyChar: CBCharacteristic?
     private var writeType: CBCharacteristicWriteType = .withResponse
@@ -145,6 +154,7 @@ final class OBDManager: NSObject, ObservableObject {
             return
         }
         discovered = []
+        discoveredPeripherals = [:]
         phase = .scanning
         // nil services: many ELM327 clones don't advertise a usable service UUID.
         central.scanForPeripherals(withServices: nil,
@@ -152,7 +162,9 @@ final class OBDManager: NSObject, ObservableObject {
     }
 
     func connect(_ device: OBDDevice) {
-        guard let p = central.retrievePeripherals(withIdentifiers: [device.id]).first else { return }
+        let p = discoveredPeripherals[device.id]
+            ?? central.retrievePeripherals(withIdentifiers: [device.id]).first
+        guard let p else { return }
         central.stopScan()
         peripheral = p
         p.delegate = self
@@ -291,18 +303,25 @@ extension OBDManager: CBCentralManagerDelegate, CBPeripheralDelegate {
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                     advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let advName = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name
-        guard let name = advName, !name.isEmpty else { return }
+        let advServices = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
+        let advertisesOBD = advServices.contains { Self.knownOBDServices.contains($0) }
+        // Keep anything with a name, or unnamed devices that advertise an OBD
+        // service UUID (cheap clones often advertise no name until connected).
+        guard let rawName = advName.flatMap({ $0.isEmpty ? nil : $0 }) ?? (advertisesOBD ? "OBD Adapter" : nil)
+        else { return }
         let id = peripheral.identifier
         Task { @MainActor in
-            // Surface likely OBD adapters first, but list everything named.
-            let device = OBDDevice(id: id, name: name)
-            if !discovered.contains(device) {
-                let looksOBD = name.uppercased().contains("OBD")
-                    || name.uppercased().contains("ELM")
-                    || name.uppercased().contains("VGATE")
-                    || name.uppercased().contains("VLINK")
-                if looksOBD { discovered.insert(device, at: 0) }
-                else { discovered.append(device) }
+            discoveredPeripherals[id] = peripheral
+            let device = OBDDevice(id: id, name: rawName)
+            let up = rawName.uppercased()
+            let looksOBD = advertisesOBD || ["OBD", "ELM", "VGATE", "VLINK", "VEEPEAK", "OBDLINK"]
+                .contains { up.contains($0) }
+            if let idx = discovered.firstIndex(of: device) {
+                discovered[idx] = device   // refresh
+            } else if looksOBD {
+                discovered.insert(device, at: 0)
+            } else {
+                discovered.append(device)
             }
         }
     }
