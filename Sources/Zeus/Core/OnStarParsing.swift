@@ -308,6 +308,12 @@ enum VehicleResponseParser {
         return n.contains("TIRE") && n.contains("PRESSURE") && keys.contains { n.contains($0) }
     }
 
+    /// A short, log-safe excerpt of a response body for error messages.
+    static func snippet(_ data: Data, max: Int = 300) -> String {
+        let s = String(decoding: data, as: UTF8.self)
+        return s.count > max ? String(s.prefix(max)) + "…" : s
+    }
+
     /// Title-case a GM ALL-CAPS diagnostic name into something readable.
     static func humanLabel(_ raw: String) -> String {
         let lower = raw.lowercased()
