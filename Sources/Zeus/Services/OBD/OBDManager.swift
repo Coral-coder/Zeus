@@ -4,25 +4,70 @@ import CoreBluetooth
 /// A single live parameter read from the car.
 struct OBDReading: Identifiable {
     let id = UUID()
+    let command: String
     let label: String
     let value: Double
     let unit: String
-    var formatted: String { String(format: "%.0f %@", value, unit) }
+    var systemImage: String = "gauge.with.dots.needle.bottom.50percent"
+    var formatted: String {
+        let num = value == value.rounded() ? "\(Int(value))" : String(format: "%.1f", value)
+        return unit.isEmpty ? num : "\(num) \(unit)"
+    }
 }
 
-/// Connects to a Bluetooth LE ELM327-style OBD-II dongle, polls a set of PIDs,
-/// and publishes live readings. The Bolt exposes standard OBD-II PIDs plus
-/// manufacturer EV PIDs; here we read the universal ones (speed, RPM-equiv,
-/// coolant/battery temp, control module voltage) and expose hooks for the
-/// GM-specific high-voltage battery PIDs.
+/// A discovered Bluetooth OBD adapter the user can connect to.
+struct OBDDevice: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    static func == (a: OBDDevice, b: OBDDevice) -> Bool { a.id == b.id }
+}
+
+/// Connects to a Bluetooth LE ELM327-style OBD-II adapter, runs the ELM327
+/// init handshake, then polls a set of PIDs in a strict request/response queue
+/// (one command out, wait for the ">" prompt, then the next). Unsupported PIDs
+/// (those the Bolt answers with "NO DATA"/errors) are detected and dropped so
+/// only live, meaningful values are shown.
+///
+/// BLE ELM327 clones vary wildly in their advertised service/characteristic
+/// UUIDs, so we scan broadly and pick the write/notify characteristics by their
+/// properties rather than hard-coded UUIDs.
 @MainActor
 final class OBDManager: NSObject, ObservableObject {
     static let shared = OBDManager()
 
-    @Published private(set) var isConnected = false
+    enum Phase: Equatable {
+        case idle
+        case bluetoothOff
+        case scanning
+        case connecting(String)
+        case initializing
+        case live
+        case failed(String)
+
+        var label: String {
+            switch self {
+            case .idle: return "Not connected"
+            case .bluetoothOff: return "Turn on Bluetooth"
+            case .scanning: return "Searching for adapter…"
+            case .connecting(let n): return "Connecting to \(n)…"
+            case .initializing: return "Initializing…"
+            case .live: return "Live"
+            case .failed(let m): return m
+            }
+        }
+    }
+
+    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var discovered: [OBDDevice] = []
     @Published private(set) var readings: [String: OBDReading] = [:]
 
-    /// Readings suitable for the CarPlay dashboard, ordered.
+    var isConnected: Bool {
+        if case .live = phase { return true }
+        if case .initializing = phase { return true }
+        return false
+    }
+
+    /// Readings suitable for a dashboard, in poll order, supported only.
     var latestReadable: [OBDReading] {
         Self.pollPlan.compactMap { readings[$0.command] }
     }
@@ -31,23 +76,60 @@ final class OBDManager: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var writeChar: CBCharacteristic?
     private var notifyChar: CBCharacteristic?
+    private var writeType: CBCharacteristicWriteType = .withResponse
+
     private var buffer = ""
-    private var pollIndex = 0
+    private var pollTimer: Timer?
 
-    // Common ELM327 BLE service/characteristics vary by clone; these cover the
-    // widespread "VLinker / Vgate" UUIDs. Adjust for your adapter if needed.
-    private let serviceUUID = CBUUID(string: "FFF0")
-    private let writeUUID   = CBUUID(string: "FFF2")
-    private let notifyUUID  = CBUUID(string: "FFF1")
+    /// The command currently awaiting a ">" prompt, and what to do with its reply.
+    private var pending: (command: String, handler: (String) -> Void)?
+    private var commandQueue: [(String, (String) -> Void)] = []
 
-    /// PIDs to poll in a loop. `command` is the OBD service-01 PID hex.
-    struct PID { let command: String; let label: String; let unit: String; let decode: ([Int]) -> Double }
+    /// PIDs the adapter answered "NO DATA"/unsupported for — skipped thereafter.
+    private var unsupported: Set<String> = []
+
+    // MARK: - PID plan
+
+    struct PID {
+        let command: String
+        let label: String
+        let unit: String
+        let icon: String
+        /// Decode the data bytes (after the "41 <pid>" header) into a value.
+        let decode: ([Int]) -> Double?
+    }
+
+    /// Standard OBD-II (service 01) PIDs. The Bolt EV supports a subset; the
+    /// rest are auto-dropped after the first "NO DATA". Values are converted to
+    /// US units here (mph, °F).
     static let pollPlan: [PID] = [
-        PID(command: "010D", label: "Speed", unit: "km/h") { bytes in Double(bytes.first ?? 0) },
-        PID(command: "010C", label: "RPM", unit: "rpm") { b in (Double(b[0]) * 256 + Double(b[1])) / 4 },
-        PID(command: "0105", label: "Coolant", unit: "°C") { b in Double(b[0]) - 40 },
-        PID(command: "0142", label: "Module V", unit: "V") { b in (Double(b[0]) * 256 + Double(b[1])) / 1000 },
-        PID(command: "015B", label: "HV Battery", unit: "%") { b in Double(b[0]) * 100 / 255 }
+        PID(command: "015B", label: "HV Battery", unit: "%", icon: "battery.75") { b in
+            b.first.map { Double($0) * 100 / 255 }
+        },
+        PID(command: "010D", label: "Speed", unit: "mph", icon: "speedometer") { b in
+            b.first.map { Double($0) * 0.621371 }
+        },
+        PID(command: "010C", label: "Motor", unit: "rpm", icon: "gauge.with.needle") { b in
+            b.count >= 2 ? (Double(b[0]) * 256 + Double(b[1])) / 4 : nil
+        },
+        PID(command: "0142", label: "12V Battery", unit: "V", icon: "minus.plus.batteryblock.fill") { b in
+            b.count >= 2 ? (Double(b[0]) * 256 + Double(b[1])) / 1000 : nil
+        },
+        PID(command: "0146", label: "Ambient", unit: "°F", icon: "thermometer.medium") { b in
+            b.first.map { Double($0) - 40 }.map { $0 * 9/5 + 32 }
+        },
+        PID(command: "0105", label: "Coolant", unit: "°F", icon: "thermometer.snowflake") { b in
+            b.first.map { Double($0) - 40 }.map { $0 * 9/5 + 32 }
+        },
+        PID(command: "0104", label: "Load", unit: "%", icon: "gauge.with.dots.needle.67percent") { b in
+            b.first.map { Double($0) * 100 / 255 }
+        },
+        PID(command: "0111", label: "Throttle", unit: "%", icon: "pedal.accelerator") { b in
+            b.first.map { Double($0) * 100 / 255 }
+        },
+        PID(command: "0133", label: "Baro", unit: "kPa", icon: "barometer") { b in
+            b.first.map { Double($0) }
+        }
     ]
 
     override init() {
@@ -55,104 +137,230 @@ final class OBDManager: NSObject, ObservableObject {
         central = CBCentralManager(delegate: self, queue: .main)
     }
 
-    func connect() {
-        guard central.state == .poweredOn else { return }
-        central.scanForPeripherals(withServices: [serviceUUID])
+    // MARK: - Lifecycle
+
+    func startScan() {
+        guard central.state == .poweredOn else {
+            phase = .bluetoothOff
+            return
+        }
+        discovered = []
+        phase = .scanning
+        // nil services: many ELM327 clones don't advertise a usable service UUID.
+        central.scanForPeripherals(withServices: nil,
+                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+    }
+
+    func connect(_ device: OBDDevice) {
+        guard let p = central.retrievePeripherals(withIdentifiers: [device.id]).first else { return }
+        central.stopScan()
+        peripheral = p
+        p.delegate = self
+        phase = .connecting(device.name)
+        central.connect(p)
     }
 
     func disconnect() {
+        pollTimer?.invalidate(); pollTimer = nil
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        readings = [:]
+        unsupported = []
+        commandQueue = []
+        pending = nil
+        buffer = ""
+        phase = .idle
     }
 
-    // MARK: - Polling
+    // MARK: - ELM327 command queue
 
-    private func sendNextPID() {
-        guard let peripheral, let writeChar, !Self.pollPlan.isEmpty else { return }
-        let pid = Self.pollPlan[pollIndex % Self.pollPlan.count]
-        pollIndex += 1
-        let cmd = pid.command + "\r"
-        peripheral.writeValue(Data(cmd.utf8), for: writeChar, type: .withoutResponse)
+    private func enqueue(_ command: String, handler: @escaping (String) -> Void) {
+        commandQueue.append((command, handler))
+        pumpQueue()
     }
 
-    private func handleLine(_ line: String, for pid: PID) {
-        // Response like "41 0D 1A" -> drop the "41" + PID echo, decode the rest.
-        let hex = line.replacingOccurrences(of: " ", with: "").uppercased()
-        guard hex.hasPrefix("41") else { return }
-        let payload = Array(hex.dropFirst(4)) // drop "41" + 2-char PID
-        var bytes: [Int] = []
-        var i = payload.startIndex
-        while i < payload.endIndex {
-            let next = payload.index(i, offsetBy: 2, limitedBy: payload.endIndex) ?? payload.endIndex
-            if let b = Int(String(payload[i..<next]), radix: 16) { bytes.append(b) }
-            i = next
+    private func pumpQueue() {
+        guard pending == nil, !commandQueue.isEmpty,
+              let peripheral, let writeChar else { return }
+        let (command, handler) = commandQueue.removeFirst()
+        pending = (command, handler)
+        buffer = ""
+        let line = command + "\r"
+        peripheral.writeValue(Data(line.utf8), for: writeChar, type: writeType)
+    }
+
+    /// Called when a complete ELM327 reply (terminated by ">") arrives.
+    private func completePending() {
+        guard let (_, handler) = pending else { return }
+        let reply = buffer
+        pending = nil
+        handler(reply)
+        pumpQueue()
+    }
+
+    private func runInitThenPoll() {
+        phase = .initializing
+        // ATZ reset, echo/linefeed/spaces off, headers off, auto protocol.
+        for cmd in ["ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"] {
+            enqueue(cmd) { _ in }
         }
-        guard !bytes.isEmpty else { return }
-        let reading = OBDReading(label: pid.label, value: pid.decode(bytes), unit: pid.unit)
-        readings[pid.command] = reading
+        // A throwaway 0100 to make the adapter negotiate the protocol.
+        enqueue("0100") { [weak self] _ in
+            Task { @MainActor in self?.beginPolling() }
+        }
+    }
+
+    private func beginPolling() {
+        phase = .live
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollOnce() }
+        }
+        pollOnce()
+    }
+
+    private func pollOnce() {
+        for pid in Self.pollPlan where !unsupported.contains(pid.command) {
+            enqueue(pid.command) { [weak self] reply in
+                Task { @MainActor in self?.handlePIDReply(pid, reply: reply) }
+            }
+        }
+    }
+
+    private func handlePIDReply(_ pid: PID, reply: String) {
+        let cleaned = reply.uppercased()
+        if cleaned.contains("NO DATA") || cleaned.contains("UNABLE")
+            || cleaned.contains("ERROR") || cleaned.contains("?") {
+            unsupported.insert(pid.command)
+            readings[pid.command] = nil
+            return
+        }
+        guard let bytes = Self.dataBytes(from: reply, pid: pid.command),
+              let value = pid.decode(bytes) else { return }
+        readings[pid.command] = OBDReading(command: pid.command, label: pid.label,
+                                           value: value, unit: pid.unit, systemImage: pid.icon)
+    }
+
+    /// Extract the data bytes from a "41 0D 1A …" style reply for a given PID.
+    static func dataBytes(from reply: String, pid: String) -> [Int]? {
+        // The mode-01 echo "41" + the 2-char PID number identifies our row.
+        let respMode = "41"
+        let pidNum = String(pid.dropFirst(2)).uppercased()       // "010D" → "0D"
+        // Normalize: keep only hex pairs across all lines.
+        let tokens = reply
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: ">", with: " ")
+            .split(separator: " ")
+            .map { String($0).uppercased() }
+
+        // Find the "41" then matching pid, take the rest of that response.
+        var hex: [String] = []
+        if tokens.contains(respMode) {
+            // Tokens may be split or joined; rebuild a flat byte stream.
+            var flat: [String] = []
+            for t in tokens {
+                if t.count == 2, Int(t, radix: 16) != nil { flat.append(t) }
+                else if t.count % 2 == 0, t.allSatisfy({ $0.isHexDigit }) {
+                    flat.append(contentsOf: stride(from: 0, to: t.count, by: 2).map {
+                        let s = t.index(t.startIndex, offsetBy: $0)
+                        let e = t.index(s, offsetBy: 2)
+                        return String(t[s..<e])
+                    })
+                }
+            }
+            if let i = flat.firstIndex(of: respMode), i + 1 < flat.count, flat[i + 1] == pidNum {
+                hex = Array(flat[(i + 2)...])
+            }
+        }
+        guard !hex.isEmpty else { return nil }
+        return hex.compactMap { Int($0, radix: 16) }
     }
 }
 
 extension OBDManager: CBCentralManagerDelegate, CBPeripheralDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        Task { @MainActor in if central.state == .poweredOn { connect() } }
+        Task { @MainActor in
+            switch central.state {
+            case .poweredOn: if case .bluetoothOff = phase { phase = .idle }
+            case .poweredOff, .unauthorized, .unsupported: phase = .bluetoothOff
+            default: break
+            }
+        }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                     advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        let advName = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name
+        guard let name = advName, !name.isEmpty else { return }
+        let id = peripheral.identifier
         Task { @MainActor in
-            self.peripheral = peripheral
-            peripheral.delegate = self
-            central.stopScan()
-            central.connect(peripheral)
+            // Surface likely OBD adapters first, but list everything named.
+            let device = OBDDevice(id: id, name: name)
+            if !discovered.contains(device) {
+                let looksOBD = name.uppercased().contains("OBD")
+                    || name.uppercased().contains("ELM")
+                    || name.uppercased().contains("VGATE")
+                    || name.uppercased().contains("VLINK")
+                if looksOBD { discovered.insert(device, at: 0) }
+                else { discovered.append(device) }
+            }
         }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
-            self.isConnected = true
-            peripheral.discoverServices([serviceUUID])
+            phase = .initializing
+            peripheral.discoverServices(nil)
         }
     }
 
+    nonisolated func centralManager(_ central: CBCentralManager,
+                                    didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        Task { @MainActor in phase = .failed("Couldn't connect to the adapter.") }
+    }
+
     nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        Task { @MainActor in self.isConnected = false }
+        Task { @MainActor in
+            pollTimer?.invalidate(); pollTimer = nil
+            if case .failed = phase {} else { phase = .idle }
+        }
     }
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         Task { @MainActor in
-            peripheral.services?.forEach { peripheral.discoverCharacteristics(nil, for: $0) }
+            for service in peripheral.services ?? [] {
+                peripheral.discoverCharacteristics(nil, for: service)
+            }
         }
     }
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         Task { @MainActor in
             for char in service.characteristics ?? [] {
-                if char.uuid == writeUUID { writeChar = char }
-                if char.uuid == notifyUUID {
+                let props = char.properties
+                if props.contains(.notify) || props.contains(.indicate) {
                     notifyChar = char
                     peripheral.setNotifyValue(true, for: char)
                 }
-            }
-            // Init ELM327 then begin polling.
-            if let writeChar {
-                ["ATZ\r", "ATE0\r", "ATSP0\r"].forEach {
-                    peripheral.writeValue(Data($0.utf8), for: writeChar, type: .withoutResponse)
+                if props.contains(.writeWithoutResponse) {
+                    writeChar = char; writeType = .withoutResponse
+                } else if props.contains(.write), writeChar == nil {
+                    writeChar = char; writeType = .withResponse
                 }
-                sendNextPID()
+            }
+            // Once we have both endpoints, kick off the ELM327 handshake (once).
+            if writeChar != nil, notifyChar != nil, pending == nil, commandQueue.isEmpty {
+                runInitThenPoll()
             }
         }
     }
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard let data = characteristic.value, let text = String(data: data, encoding: .ascii) else { return }
+        guard let data = characteristic.value,
+              let text = String(data: data, encoding: .ascii) else { return }
         Task { @MainActor in
             buffer += text
-            guard buffer.contains(">") || buffer.contains("\r") else { return }
-            let lines = buffer.split(whereSeparator: { $0 == "\r" || $0 == ">" })
-            let lastPID = Self.pollPlan[(pollIndex - 1 + Self.pollPlan.count) % Self.pollPlan.count]
-            for line in lines { handleLine(String(line), for: lastPID) }
-            buffer = ""
-            sendNextPID()
+            if buffer.contains(">") { completePending() }
         }
     }
 }

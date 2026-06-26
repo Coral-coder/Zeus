@@ -138,6 +138,54 @@ struct EnergyRing: View {
     }
 }
 
+// MARK: - Stat card & grid
+
+/// A compact frosted card showing one labeled statistic with an icon.
+struct StatCard: View {
+    let stat: StatItem
+
+    private var accent: Color {
+        stat.accentHex.map { Color(hex: $0) } ?? Aero.bolt
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: stat.systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(accent)
+                    .symbolRenderingMode(.hierarchical)
+                Text(stat.label.uppercased())
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(Aero.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            Text(stat.value)
+                .font(.aero(20, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .aeroGlass(cornerRadius: 18)
+    }
+}
+
+/// A responsive 2-column grid of stat cards — "all the car stats".
+struct StatGrid: View {
+    let stats: [StatItem]
+    private let columns = [GridItem(.flexible(), spacing: 12),
+                           GridItem(.flexible(), spacing: 12)]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ForEach(stats) { StatCard(stat: $0) }
+        }
+    }
+}
+
 // MARK: - Status pill
 
 struct StatusPill: View {

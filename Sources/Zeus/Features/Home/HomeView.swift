@@ -25,6 +25,15 @@ struct HomeView: View {
 
                     CommandGrid()
 
+                    if let stats = snap.stats, !stats.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Vehicle Stats", systemImage: "chart.bar.doc.horizontal.fill")
+                                .font(.aeroHeading)
+                                .foregroundStyle(.white)
+                            StatGrid(stats: stats)
+                        }
+                    }
+
                     if let error = vehicle.lastError {
                         Text(error)
                             .font(.aeroCaption)

@@ -40,6 +40,8 @@ struct MainTabView: View {
         TabView {
             HomeView()
                 .tabItem { Label("Command", systemImage: "bolt.car.fill") }
+            LiveView()
+                .tabItem { Label("Live", systemImage: "dot.radiowaves.left.and.right") }
             ChargerMapView()
                 .tabItem { Label("Charge", systemImage: "ev.charger.fill") }
             TimersView()
