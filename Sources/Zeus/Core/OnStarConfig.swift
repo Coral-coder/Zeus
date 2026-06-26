@@ -13,17 +13,25 @@ import Foundation
 struct OnStarConfig: Codable, Equatable {
     /// Your GM / MyChevrolet account email.
     var email: String
+    /// Your GM account password. Stored in Keychain; required for the on-device
+    /// B2C login and for unattended token re-auth (GM tokens expire).
+    var password: String
     /// Your Bolt's VIN.
     var vin: String
+    /// The TOTP shared secret (base32) from your authenticator-app MFA setup.
+    /// Used to generate the 6-digit MFA code during login.
+    var totpSecret: String
     /// A stable per-install device UUID. Generated once and stored in Keychain.
     var deviceId: String
 
     /// The OnStar PIN used to authorize remote commands (kept in Keychain).
     var commandPIN: String?
 
-    static func makeNew(email: String, vin: String) -> OnStarConfig {
+    static func makeNew(email: String, password: String, vin: String, totpSecret: String) -> OnStarConfig {
         OnStarConfig(email: email,
+                     password: password,
                      vin: vin.uppercased(),
+                     totpSecret: totpSecret.replacingOccurrences(of: " ", with: "").uppercased(),
                      deviceId: UUID().uuidString,
                      commandPIN: nil)
     }

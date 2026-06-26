@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// First-run flow: collect the GM account email + VIN, then launch the secure
-/// OnStar web login (which handles password + MFA on GM's own page).
+/// First-run flow: collect the GM account email, password, VIN, and TOTP secret,
+/// then run the on-device OnStar (Azure B2C + TOTP) login.
 struct OnboardingView: View {
     @EnvironmentObject private var vehicle: VehicleManager
     @State private var email = ""
+    @State private var password = ""
     @State private var vin = ""
+    @State private var totpSecret = ""
     @State private var signingIn = false
 
     var body: some View {
@@ -35,7 +37,10 @@ struct OnboardingView: View {
                             field("OnStar Email", text: $email, icon: "envelope.fill")
                                 .keyboardType(.emailAddress)
                                 .textInputAutocapitalization(.never)
+                            secureField("Password", text: $password, icon: "lock.fill")
                             field("VIN", text: $vin, icon: "number")
+                                .textInputAutocapitalization(.characters)
+                            secureField("TOTP Secret (authenticator key)", text: $totpSecret, icon: "key.fill")
                                 .textInputAutocapitalization(.characters)
 
                             Button {
@@ -53,7 +58,7 @@ struct OnboardingView: View {
                         }
                     }
 
-                    Text("Zeus signs in through OnStar's own secure page — your password and MFA never touch this app. Unofficial; for personal use with your own vehicle.")
+                    Text("Zeus signs in to OnStar on-device using your account and the TOTP key from your authenticator-app MFA. Credentials are stored only in your iPhone's Keychain. Unofficial; for personal use with your own vehicle.")
                         .font(.aeroCaption)
                         .foregroundStyle(Aero.textTertiary)
                         .multilineTextAlignment(.center)
@@ -61,6 +66,7 @@ struct OnboardingView: View {
                     if let error = vehicle.lastError {
                         Text(error).font(.aeroCaption).foregroundStyle(Aero.flare)
                             .multilineTextAlignment(.center)
+                            .textSelection(.enabled)
                     }
                 }
                 .padding(24)
@@ -69,13 +75,21 @@ struct OnboardingView: View {
     }
 
     private var canSubmit: Bool {
-        email.contains("@") && vin.trimmingCharacters(in: .whitespaces).count == 17
+        email.contains("@")
+            && !password.isEmpty
+            && vin.trimmingCharacters(in: .whitespaces).count == 17
+            && totpSecret.trimmingCharacters(in: .whitespaces).count >= 16
     }
 
     private func start() {
         signingIn = true
         Task {
-            do { try vehicle.saveConfig(email: email, vin: vin) } catch { }
+            do {
+                try vehicle.saveConfig(email: email.trimmingCharacters(in: .whitespaces),
+                                       password: password,
+                                       vin: vin.trimmingCharacters(in: .whitespaces),
+                                       totpSecret: totpSecret)
+            } catch { }
             await vehicle.signIn()
             signingIn = false
         }
@@ -85,6 +99,18 @@ struct OnboardingView: View {
         HStack(spacing: 12) {
             Image(systemName: icon).foregroundStyle(Aero.bolt).frame(width: 22)
             TextField("", text: text, prompt: Text(placeholder).foregroundColor(Aero.textTertiary))
+                .foregroundStyle(.white)
+                .autocorrectionDisabled()
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.15)))
+    }
+
+    private func secureField(_ placeholder: String, text: Binding<String>, icon: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).foregroundStyle(Aero.bolt).frame(width: 22)
+            SecureField("", text: text, prompt: Text(placeholder).foregroundColor(Aero.textTertiary))
                 .foregroundStyle(.white)
                 .autocorrectionDisabled()
         }

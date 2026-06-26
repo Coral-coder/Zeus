@@ -18,7 +18,6 @@ final class VehicleManager: ObservableObject {
     @Published var lastError: String?
 
     private let service = RemoteCommandService.shared
-    private let auth = GMAuthSession()
     private var config: OnStarConfig?
 
     private init() {
@@ -39,8 +38,8 @@ final class VehicleManager: ObservableObject {
         }
     }
 
-    func saveConfig(email: String, vin: String) throws {
-        let cfg = OnStarConfig.makeNew(email: email, vin: vin)
+    func saveConfig(email: String, password: String, vin: String, totpSecret: String) throws {
+        let cfg = OnStarConfig.makeNew(email: email, password: password, vin: vin, totpSecret: totpSecret)
         try KeychainStore.save(cfg, for: .onStarConfig)
         self.config = cfg
         AppGroup.defaults.set(cfg.vin, forKey: SharedKey.selectedVIN)
@@ -54,10 +53,13 @@ final class VehicleManager: ObservableObject {
     }
 
     func signIn() async {
+        guard let cfg = config else {
+            lastError = OnStarError.notConfigured.localizedDescription
+            return
+        }
         do {
-            // The auth session must run on the main actor; hand its login to the
-            // service which persists the resulting token.
-            try await service.signIn(using: { try await self.auth.login() })
+            // Drive GM's B2C + TOTP login on-device; persist the resulting token.
+            try await service.signIn(using: { try await GMAuth(config: cfg).authenticate() })
             isAuthenticated = true
             await loadVehicles()
             await refresh()
