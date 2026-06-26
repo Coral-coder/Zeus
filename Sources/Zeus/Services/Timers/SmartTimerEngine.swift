@@ -32,7 +32,7 @@ struct DepartureSchedule: Identifiable, Codable, Hashable {
 @MainActor
 final class SmartTimerEngine: ObservableObject {
     static let shared = SmartTimerEngine()
-    static let bgTaskID = "com.zeus.bolt.autostart"
+    static let bgTaskID = "com.lightwave.zeus.autostart"
 
     @Published var schedules: [DepartureSchedule] = []
 

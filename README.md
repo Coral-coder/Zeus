@@ -96,7 +96,7 @@ open Zeus.xcodeproj
 ### 2. Set your signing + identifiers
 - In **project.yml** set `DEVELOPMENT_TEAM`, then re-run `xcodegen generate`
   (or set the team in Xcode → Signing & Capabilities for both targets).
-- The app + widget share **App Group `group.com.zeus.bolt`** and a Keychain
+- The app + widget share **App Group `group.com.lightwave.zeus`** and a Keychain
   group. Create the App Group in your Apple Developer account and make sure both
   targets have it enabled. To share the OnStar token with widgets, set
   `KeychainStore.accessGroup` to your team's keychain group.
@@ -126,7 +126,9 @@ On first launch, enter your OnStar email + VIN and complete the secure GM login.
 `.github/workflows/testflight.yml` builds and uploads a TestFlight build with
 **fastlane** on a macOS runner. Trigger it from the **Actions** tab
 (*Run workflow*) or by pushing a tag like `v0.1.0`. It runs `xcodegen generate`,
-fetches signing assets via **fastlane match**, builds, and uploads.
+then builds and uploads using **Xcode automatic signing** — Apple manages the
+distribution certificate and provisioning profiles via your App Store Connect API
+key (`-allowProvisioningUpdates`), so there's **no `match` certs repo to set up**.
 
 ### Required GitHub Actions secrets
 | Secret | What it is |
@@ -135,20 +137,17 @@ fetches signing assets via **fastlane match**, builds, and uploads.
 | `ASC_ISSUER_ID` | App Store Connect API issuer ID. |
 | `ASC_KEY_CONTENT` | The `.p8` key, **base64-encoded** (`base64 -i AuthKey_XXX.p8 \| pbcopy`). |
 | `TEAM_ID` | Your 10-char Apple Developer Team ID. |
-| `MATCH_GIT_URL` | Git URL of your fastlane **match** certificates repo. |
-| `MATCH_PASSWORD` | The match encryption passphrase. |
-| `MATCH_GIT_BASIC_AUTHORIZATION` | base64 of `username:personal_access_token` for the match repo. |
 
-These are the standard fastlane-match + App Store Connect API secrets — the same
-set you already have in your other repo can be copied over verbatim.
+> The API key must have **Admin** (or App Manager) access so it can create the
+> App ID, capabilities, certificate and profiles automatically on first run.
 
 ### One-time prerequisites
-- App IDs `com.zeus.bolt` and `com.zeus.bolt.widgets` exist in the portal with
-  the **App Groups** + **Siri** capabilities, and an **App Group**
-  `group.com.zeus.bolt`.
-- The app record exists in App Store Connect (matching `com.zeus.bolt`).
-- Your match repo holds **App Store** distribution certs/profiles for both IDs
-  (run `fastlane match appstore` once locally to seed it).
+- An app record for **`com.lightwave.zeus`** exists in App Store Connect
+  (name: *Zeus Remote*). Automatic signing will register the App ID and most
+  capabilities, but it's most reliable to pre-create:
+  - the **App Group** `group.com.lightwave.zeus`, and
+  - the **Siri** + **App Groups** capabilities on `com.lightwave.zeus` and
+    `com.lightwave.zeus.widgets`.
 
 ---
 

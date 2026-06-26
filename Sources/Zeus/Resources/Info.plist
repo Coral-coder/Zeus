@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>Zeus</string>
+    <string>Zeus Remote</string>
     <key>CFBundleName</key>
     <string>Zeus</string>
     <key>CFBundleShortVersionString</key>
@@ -27,7 +27,7 @@
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>com.zeus.bolt.auth</string>
+            <string>com.lightwave.zeus.auth</string>
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>msauth.com.gm.mychevrolet</string>
@@ -58,7 +58,7 @@
     </array>
     <key>BGTaskSchedulerPermittedIdentifiers</key>
     <array>
-        <string>com.zeus.bolt.autostart</string>
+        <string>com.lightwave.zeus.autostart</string>
     </array>
 
     <!-- CarPlay scene. The default phone scene is managed by the SwiftUI App. -->

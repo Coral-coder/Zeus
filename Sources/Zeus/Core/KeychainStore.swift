@@ -6,7 +6,7 @@ import Security
 /// widget extension can read the token too (set `accessGroup` to your team's
 /// shared keychain group).
 enum KeychainStore {
-    private static let service = "com.zeus.bolt"
+    private static let service = "com.lightwave.zeus"
     private static let accessGroup: String? = nil
 
     enum Key: String {

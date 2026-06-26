@@ -1,12 +1,12 @@
 default_platform(:ios)
 
-APP_ID    = "com.zeus.bolt"
-WIDGET_ID = "com.zeus.bolt.widgets"
+APP_ID    = "com.lightwave.zeus"
+WIDGET_ID = "com.lightwave.zeus.widgets"
 PROJECT   = "Zeus.xcodeproj"
 SCHEME    = "Zeus"
 
 platform :ios do
-  desc "Build and upload a TestFlight build"
+  desc "Build and upload a TestFlight build (automatic signing via ASC API key)"
   lane :beta do
     # Creates a temporary CI keychain when running on CI (no-op locally).
     setup_ci
@@ -21,17 +21,24 @@ platform :ios do
     # Generate the Xcode project from project.yml (kept out of git).
     sh("cd .. && xcodegen generate")
 
-    # Fetch shared distribution certs + profiles (read-only).
-    match(type: "appstore", app_identifier: [APP_ID, WIDGET_ID], api_key: api_key, readonly: true)
-
+    # Use Xcode automatic signing; Apple manages the cert + profiles via the API
+    # key during -allowProvisioningUpdates, so no certs repo / match is needed.
     team_id = ENV.fetch("TEAM_ID")
-    apply_manual_signing("Zeus",        APP_ID,    team_id)
-    apply_manual_signing("ZeusWidgets", WIDGET_ID, team_id)
+    ["Zeus", "ZeusWidgets"].each do |target|
+      update_code_signing_settings(
+        path: PROJECT,
+        use_automatic_signing: true,
+        team_id: team_id,
+        targets: [target]
+      )
+    end
 
-    # Build number = last TestFlight build + 1 (falls back to the run number).
-    latest = latest_testflight_build_number(
-      api_key: api_key, app_identifier: APP_ID, initial_build_number: 0
-    ) rescue (ENV["GITHUB_RUN_NUMBER"] || "0").to_i
+    # Build number = last TestFlight build + 1 (falls back to the CI run number).
+    latest = begin
+      latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID, initial_build_number: 0)
+    rescue StandardError
+      (ENV["GITHUB_RUN_NUMBER"] || "0").to_i
+    end
     increment_build_number(xcodeproj: PROJECT, build_number: latest + 1)
 
     build_app(
@@ -40,11 +47,11 @@ platform :ios do
       export_method: "app-store",
       output_directory: "build",
       clean: true,
+      api_key: api_key,
+      xcargs: "-allowProvisioningUpdates",
       export_options: {
-        provisioningProfiles: {
-          APP_ID    => "match AppStore #{APP_ID}",
-          WIDGET_ID => "match AppStore #{WIDGET_ID}"
-        }
+        signingStyle: "automatic",
+        teamID: team_id
       }
     )
 
@@ -52,19 +59,6 @@ platform :ios do
       api_key: api_key,
       skip_waiting_for_build_processing: true,
       distribute_external: false
-    )
-  end
-
-  # Force a target onto manual signing with the match-provisioned profile.
-  def apply_manual_signing(target, bundle_id, team_id)
-    update_code_signing_settings(
-      path: PROJECT,
-      use_automatic_signing: false,
-      targets: [target],
-      bundle_identifier: bundle_id,
-      team_id: team_id,
-      code_sign_identity: "Apple Distribution",
-      profile_name: "match AppStore #{bundle_id}"
     )
   end
 end
