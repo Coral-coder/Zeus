@@ -12,10 +12,13 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     VERSIONING_SYSTEM: "apple-generic"
     SWIFT_VERSION: "5.10"
-    # Skip the App Intents SSU "flexible matching" training pass, which fails in
-    # archive on the CI toolchain ("AppIntentsSSUTraining ... Unable to parse
-    # Info.plist"). Siri/App Shortcuts still work; this only disables on-device
-    # fuzzy phrase matching training.
+    # Keep the processed Info.plist as XML. Xcode emits a *binary* plist in
+    # archive by default, and the App Intents SSU training tool
+    # (appintentsnltrainingprocessor) can't parse binary plists — it fails with
+    # "Unable to parse Info.plist". Forcing XML lets that step read it.
+    INFOPLIST_OUTPUT_FORMAT: "xml"
+    # Also skip the SSU flexible-matching pass (belt-and-suspenders; only affects
+    # on-device fuzzy phrase matching, not whether Siri/App Shortcuts work).
     ENABLE_APP_SHORTCUTS_FLEXIBLE_MATCHING: "NO"
     DEVELOPMENT_TEAM: "" # <- set your Apple Developer Team ID
     CODE_SIGN_STYLE: Automatic
