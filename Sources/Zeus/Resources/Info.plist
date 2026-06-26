@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Zeus</string>
+    <key>CFBundleName</key>
+    <string>Zeus</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchScreen</key>
+    <dict>
+        <key>UIColorName</key>
+        <string></string>
+    </dict>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+
+    <!-- OnStar OAuth redirect (must match GMAPI.redirectScheme). -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.zeus.bolt.auth</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>msauth.com.gm.mychevrolet</string>
+                <string>zeus</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- Privacy usage strings. -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Zeus uses your location to find nearby chargers and show your car on the map.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Zeus learns when you typically leave home or work so it can pre-start your Bolt before you go.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Zeus connects to your OBD-II adapter to read live vehicle data while driving.</string>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Zeus uses Face ID to confirm sensitive commands like unlocking and starting your car.</string>
+    <key>NSSiriUsageDescription</key>
+    <string>Zeus lets you start, stop, lock and check your Bolt with Siri.</string>
+
+    <!-- Background execution for scheduled auto-start, location and OBD. -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>fetch</string>
+        <string>processing</string>
+        <string>location</string>
+        <string>bluetooth-central</string>
+    </array>
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>com.zeus.bolt.autostart</string>
+    </array>
+
+    <!-- CarPlay scene. The default phone scene is managed by the SwiftUI App. -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <true/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>CPTemplateApplicationSceneSessionRoleApplication</key>
+            <array>
+                <dict>
+                    <key>UISceneConfigurationName</key>
+                    <string>ZeusCarPlay</string>
+                    <key>UISceneDelegateClassName</key>
+                    <string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
+                </dict>
+            </array>
+        </dict>
+    </dict>
+</dict>
+</plist>

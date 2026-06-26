@@ -1,0 +1,32 @@
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+
+# XcodeGen generates the project; keep the spec, ignore the output
+Zeus.xcodeproj/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods / Carthage (unused, but just in case)
+Pods/
+Carthage/Build/
+
+# Secrets — NEVER commit real OnStar credentials
+Secrets.xcconfig
+*.secrets.json
+Config/Secrets.plist
+
+# macOS
+.DS_Store
+
+# Misc
+*.log
