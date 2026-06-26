@@ -10,6 +10,10 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <!-- App uses only standard HTTPS/TLS (export-exempt). Avoids the per-build
+         TestFlight export-compliance prompt. -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UILaunchScreen</key>
