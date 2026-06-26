@@ -8,10 +8,7 @@
     </array>
     <key>com.apple.developer.siri</key>
     <true/>
-    <!--
-      CarPlay requires an entitlement granted by Apple. Once approved, add the
-      role you were granted, e.g.:
-      <key>com.apple.developer.carplay-charging</key><true/>
-    -->
+    <key>com.apple.developer.carplay-charging</key>
+    <true/>
 </dict>
 </plist>
