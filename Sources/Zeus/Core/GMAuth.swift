@@ -134,7 +134,7 @@ final class GMAuth: NSObject {
 
     private func finish(code: String, verifier: String) async throws -> GMToken {
         steps.append("exchanging code for GM token")
-        return try await tokens.exchange(code: code, verifier: verifier)
+        return try await tokens.exchange(code: code, verifier: verifier, deviceId: config.deviceId)
     }
 
     // MARK: - HTTP

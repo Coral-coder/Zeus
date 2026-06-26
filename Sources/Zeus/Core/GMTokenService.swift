@@ -44,10 +44,10 @@ struct GMTokenService {
 
     // MARK: - Exchanges
 
-    /// Trade an authorization code for a GM API token (via the MS id_token).
-    func exchange(code: String, verifier: String) async throws -> GMToken {
-        let msToken = try await exchangeCodeForMSToken(code: code, verifier: verifier)
-        return try await exchangeForGMToken(msIDToken: msToken)
+    /// Trade an authorization code for a GM API token (via the MS access token).
+    func exchange(code: String, verifier: String, deviceId: String) async throws -> GMToken {
+        let msAccessToken = try await exchangeCodeForMSToken(code: code, verifier: verifier)
+        return try await exchangeForGMToken(msAccessToken: msAccessToken, deviceId: deviceId)
     }
 
     func refresh(_ token: GMToken) async throws -> GMToken {
@@ -77,35 +77,40 @@ struct GMTokenService {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let http = resp as! HTTPURLResponse
         guard (200..<300).contains(http.statusCode) else {
-            throw OnStarError.tokenExchangeFailed(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw OnStarError.tokenExchangeFailed(http.statusCode, "MS-token: " + String(decoding: data, as: UTF8.self))
         }
+        // The GM API token-exchange wants the B2C *access* token (scoped to the
+        // custom Test.Read API scope), not the id_token. Prefer access_token.
         struct MSResponse: Decodable { let id_token: String?; let access_token: String? }
         let ms = try JSONDecoder().decode(MSResponse.self, from: data)
-        guard let token = ms.id_token ?? ms.access_token else {
+        guard let token = ms.access_token ?? ms.id_token else {
             throw OnStarError.authFailed("Microsoft token missing.")
         }
         return token
     }
 
-    private func exchangeForGMToken(msIDToken: String) async throws -> GMToken {
+    private func exchangeForGMToken(msAccessToken: String, deviceId: String) async throws -> GMToken {
         var req = URLRequest(url: GMAPI.gmTokenURL)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Mirrors OnStarJS getGMAPIToken exactly: the subject token is the MS
+        // *access* token, typed as access_token, with the device id. No client_id.
         req.httpBody = Self.form([
             "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-            "subject_token": msIDToken,
-            "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
-            "client_id": GMAPI.clientId,
-            "scope": "msso role_owner priv onstar gmoc user user_trailer"
+            "subject_token": msAccessToken,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "scope": "onstar gmoc user_trailer user msso priv",
+            "device_id": deviceId
         ])
-        return try await Self.parseGMToken(from: req)
+        return try await Self.parseGMToken(from: req, label: "GM-token")
     }
 
-    private static func parseGMToken(from req: URLRequest) async throws -> GMToken {
+    private static func parseGMToken(from req: URLRequest, label: String = "GM-token") async throws -> GMToken {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let http = resp as! HTTPURLResponse
         guard (200..<300).contains(http.statusCode) else {
-            throw OnStarError.tokenExchangeFailed(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw OnStarError.tokenExchangeFailed(http.statusCode, label + ": " + String(decoding: data, as: UTF8.self))
         }
         struct GMResponse: Decodable {
             let access_token: String
