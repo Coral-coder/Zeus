@@ -9,7 +9,7 @@ final class WeatherRadarModel: ObservableObject {
     @Published private(set) var host = "https://tilecache.rainviewer.com"
     @Published private(set) var frames: [RadarFrame] = []
     @Published private(set) var index = 0
-    @Published var playing = true
+    @Published var playing = false
     @Published private(set) var loading = false
 
     private let client = RainViewerClient()
@@ -26,8 +26,9 @@ final class WeatherRadarModel: ObservableObject {
         if let result = try? await client.frames(), !result.frames.isEmpty {
             host = result.host
             frames = result.frames
-            // Start near "now" (end of the past frames).
-            index = max(0, frames.count - 3)
+            // Show the most recent frame, static, so current radar renders fully
+            // before any animation churns through tiles.
+            index = frames.count - 1
             if playing { startTimer() }
         }
     }
@@ -43,7 +44,7 @@ final class WeatherRadarModel: ObservableObject {
 
     private func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, !self.frames.isEmpty else { return }
                 self.index = (self.index + 1) % self.frames.count
@@ -180,14 +181,23 @@ struct RadarMap: UIViewRepresentable {
         guard context.coordinator.template != urlTemplate else { return }
         context.coordinator.template = urlTemplate
 
-        if let old = context.coordinator.overlay {
-            map.removeOverlay(old)
+        guard let urlTemplate else {
+            if let old = context.coordinator.overlay { map.removeOverlay(old) }
             context.coordinator.overlay = nil
+            return
         }
-        guard let urlTemplate else { return }
+        // Add the new layer first, then remove the previous one, so there's no
+        // blank gap while the new frame's tiles download.
         let overlay = MKTileOverlay(urlTemplate: urlTemplate)
         overlay.canReplaceMapContent = false
+        overlay.maximumZ = 12
         map.addOverlay(overlay, level: .aboveLabels)
+        if let old = context.coordinator.overlay {
+            // Give the new tiles a moment to load before pulling the old layer.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                map.removeOverlay(old)
+            }
+        }
         context.coordinator.overlay = overlay
     }
 
