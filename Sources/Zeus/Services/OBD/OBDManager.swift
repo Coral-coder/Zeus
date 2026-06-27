@@ -67,9 +67,12 @@ final class OBDManager: NSObject, ObservableObject {
         return false
     }
 
-    /// Readings suitable for a dashboard, in poll order, supported only.
+    /// Readings suitable for a dashboard, in poll order (voltage first).
     var latestReadable: [OBDReading] {
-        Self.pollPlan.compactMap { readings[$0.command] }
+        var out: [OBDReading] = []
+        if let v = readings["ATRV"] { out.append(v) }
+        out += Self.pollPlan.compactMap { readings[$0.command] }
+        return out
     }
 
     private var central: CBCentralManager!
@@ -102,9 +105,6 @@ final class OBDManager: NSObject, ObservableObject {
     /// The command currently awaiting a ">" prompt, and what to do with its reply.
     private var pending: (command: String, handler: (String) -> Void)?
     private var commandQueue: [(String, (String) -> Void)] = []
-
-    /// PIDs the adapter answered "NO DATA"/unsupported for — skipped thereafter.
-    private var unsupported: Set<String> = []
 
     // MARK: - PID plan
 
@@ -194,7 +194,6 @@ final class OBDManager: NSObject, ObservableObject {
         watchdog?.invalidate(); watchdog = nil
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
         readings = [:]
-        unsupported = []
         commandQueue = []
         pending = nil
         buffer = ""
@@ -247,26 +246,43 @@ final class OBDManager: NSObject, ObservableObject {
         watchdog?.invalidate(); watchdog = nil
         phase = .live
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pollOnce() }
         }
         pollOnce()
     }
 
     private func pollOnce() {
-        for pid in Self.pollPlan where !unsupported.contains(pid.command) {
+        // ATRV reads the adapter's measured port voltage and works even with the
+        // ECUs asleep — a guaranteed reading that proves the link is alive.
+        enqueue("ATRV") { [weak self] reply in
+            Task { @MainActor in self?.handleVoltage(reply) }
+        }
+        // Poll every PID each cycle (no permanent drop) so values appear the
+        // moment the car wakes; we simply display whichever ones answer.
+        for pid in Self.pollPlan {
             enqueue(pid.command) { [weak self] reply in
                 Task { @MainActor in self?.handlePIDReply(pid, reply: reply) }
             }
         }
     }
 
+    private func handleVoltage(_ reply: String) {
+        // Reply looks like "12.5V". Extract the number.
+        let digits = reply.filter { $0.isNumber || $0 == "." }
+        guard let v = Double(digits), v > 1, v < 20 else { return }
+        readings["ATRV"] = OBDReading(command: "ATRV", label: "Battery (12V)",
+                                      value: v, unit: "V",
+                                      systemImage: "minus.plus.batteryblock.fill")
+    }
+
     private func handlePIDReply(_ pid: PID, reply: String) {
         let cleaned = reply.uppercased()
+        // Unanswered/unsupported this cycle — leave any prior reading as-is and
+        // try again next cycle (the car may simply be asleep right now).
         if cleaned.contains("NO DATA") || cleaned.contains("UNABLE")
-            || cleaned.contains("ERROR") || cleaned.contains("?") {
-            unsupported.insert(pid.command)
-            readings[pid.command] = nil
+            || cleaned.contains("ERROR") || cleaned.contains("STOPPED")
+            || cleaned.contains("SEARCHING") || cleaned.contains("?") {
             return
         }
         guard let bytes = Self.dataBytes(from: reply, pid: pid.command),
