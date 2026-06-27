@@ -10,7 +10,10 @@ struct OBDReading: Identifiable {
     let unit: String
     var systemImage: String = "gauge.with.dots.needle.bottom.50percent"
     var formatted: String {
-        let num = value == value.rounded() ? "\(Int(value))" : String(format: "%.1f", value)
+        let num: String
+        if value == value.rounded() { num = "\(Int(value))" }
+        else if abs(value) < 10 { num = String(format: "%.3f", value) }   // cell volts
+        else { num = String(format: "%.1f", value) }
         return unit.isEmpty ? num : "\(num) \(unit)"
     }
 }
@@ -71,7 +74,7 @@ final class OBDManager: NSObject, ObservableObject {
     var latestReadable: [OBDReading] {
         var out: [OBDReading] = []
         if let v = readings["ATRV"] { out.append(v) }
-        out += Self.pollPlan.compactMap { readings[$0.command] }
+        out += Self.pollPlan.compactMap { readings[$0.request] }
         return out
     }
 
@@ -95,6 +98,8 @@ final class OBDManager: NSObject, ObservableObject {
     private var initStarted = false
     private var receivedBytes = false
     private var watchdog: Timer?
+    /// The CAN header currently set on the adapter (to avoid redundant ATSH).
+    private var lastHeader: String?
     private var writeChar: CBCharacteristic?
     private var notifyChar: CBCharacteristic?
     private var writeType: CBCharacteristicWriteType = .withResponse
@@ -109,44 +114,56 @@ final class OBDManager: NSObject, ObservableObject {
     // MARK: - PID plan
 
     struct PID {
-        let command: String
+        /// Full request hex: mode-01 like "010D", or mode-22 like "2243AF".
+        let request: String
+        /// CAN header to address (e.g. "7E4" for the Bolt BECM). nil = broadcast.
+        let header: String?
         let label: String
         let unit: String
         let icon: String
-        /// Decode the data bytes (after the "41 <pid>" header) into a value.
+        /// Decode the data bytes (after the echoed mode + PID) into a value.
         let decode: ([Int]) -> Double?
     }
 
-    /// Standard OBD-II (service 01) PIDs. The Bolt EV supports a subset; the
-    /// rest are auto-dropped after the first "NO DATA". Values are converted to
-    /// US units here (mph, °F).
+    /// Poll plan. The Bolt's real EV battery data lives in GM manufacturer
+    /// (mode-22) PIDs addressed to the BECM at header 7E4 — the same ones
+    /// Torque Pro / Car Scanner use (sourced from the community allev.info list).
+    /// A few standard (mode-01) PIDs follow for when the car is awake/driving.
     static let pollPlan: [PID] = [
-        PID(command: "015B", label: "HV Battery", unit: "%", icon: "battery.75") { b in
-            b.first.map { Double($0) * 100 / 255 }
+        // ---- GM Bolt EV extended (header 7E4, mode 22) ----
+        PID(request: "2243AF", header: "7E4", label: "State of Charge", unit: "%", icon: "battery.100") { b in
+            b.count >= 2 ? (Double(b[0]) * 256 + Double(b[1])) * 100 / 65535 : nil
         },
-        PID(command: "010D", label: "Speed", unit: "mph", icon: "speedometer") { b in
+        PID(request: "2245F9", header: "7E4", label: "Usable Capacity", unit: "kWh", icon: "bolt.square.fill") { b in
+            b.count >= 2 ? (Double(b[0]) * 256 + Double(b[1])) * 0.0032 : nil
+        },
+        PID(request: "2240D4", header: "7E4", label: "Battery Current", unit: "A", icon: "bolt.fill") { b in
+            guard b.count >= 2 else { return nil }
+            let a = b[0] > 127 ? b[0] - 256 : b[0]            // signed high byte
+            return (Double(a) * 256 + Double(b[1])) / 20
+        },
+        PID(request: "22433C", header: "7E4", label: "Max Cell", unit: "V", icon: "arrow.up.to.line.compact") { b in
+            guard b.count >= 2 else { return nil }
+            let v = (Double(b[0]) * 256 + Double(b[1])) * 0.52   // millivolts
+            return v > 100 ? v / 1000 : v
+        },
+        PID(request: "22433B", header: "7E4", label: "Min Cell", unit: "V", icon: "arrow.down.to.line.compact") { b in
+            guard b.count >= 2 else { return nil }
+            let v = (Double(b[0]) * 256 + Double(b[1])) * 0.52
+            return v > 100 ? v / 1000 : v
+        },
+        PID(request: "22434F", header: "7E4", label: "Battery Temp", unit: "°F", icon: "thermometer.medium") { b in
+            b.first.map { (Double($0) - 40) * 9/5 + 32 }
+        },
+        PID(request: "2241A4", header: "7E4", label: "Coolant Temp", unit: "°F", icon: "thermometer.snowflake") { b in
+            b.first.map { (Double($0) - 40) * 9/5 + 32 }
+        },
+        // ---- Standard OBD-II (broadcast, mode 01) ----
+        PID(request: "010D", header: nil, label: "Speed", unit: "mph", icon: "speedometer") { b in
             b.first.map { Double($0) * 0.621371 }
         },
-        PID(command: "010C", label: "Motor", unit: "rpm", icon: "gauge.with.needle") { b in
-            b.count >= 2 ? (Double(b[0]) * 256 + Double(b[1])) / 4 : nil
-        },
-        PID(command: "0142", label: "12V Battery", unit: "V", icon: "minus.plus.batteryblock.fill") { b in
+        PID(request: "0142", header: nil, label: "Module Voltage", unit: "V", icon: "minus.plus.batteryblock.fill") { b in
             b.count >= 2 ? (Double(b[0]) * 256 + Double(b[1])) / 1000 : nil
-        },
-        PID(command: "0146", label: "Ambient", unit: "°F", icon: "thermometer.medium") { b in
-            b.first.map { Double($0) - 40 }.map { $0 * 9/5 + 32 }
-        },
-        PID(command: "0105", label: "Coolant", unit: "°F", icon: "thermometer.snowflake") { b in
-            b.first.map { Double($0) - 40 }.map { $0 * 9/5 + 32 }
-        },
-        PID(command: "0104", label: "Load", unit: "%", icon: "gauge.with.dots.needle.67percent") { b in
-            b.first.map { Double($0) * 100 / 255 }
-        },
-        PID(command: "0111", label: "Throttle", unit: "%", icon: "pedal.accelerator") { b in
-            b.first.map { Double($0) * 100 / 255 }
-        },
-        PID(command: "0133", label: "Baro", unit: "kPa", icon: "barometer") { b in
-            b.first.map { Double($0) }
         }
     ]
 
@@ -183,6 +200,7 @@ final class OBDManager: NSObject, ObservableObject {
         commandQueue = []
         pending = nil
         buffer = ""
+        lastHeader = nil
         peripheral = p
         p.delegate = self
         phase = .connecting(device.name)
@@ -201,6 +219,7 @@ final class OBDManager: NSObject, ObservableObject {
         receivedBytes = false
         writeChar = nil
         notifyChar = nil
+        lastHeader = nil
         phase = .idle
     }
 
@@ -261,7 +280,13 @@ final class OBDManager: NSObject, ObservableObject {
         // Poll every PID each cycle (no permanent drop) so values appear the
         // moment the car wakes; we simply display whichever ones answer.
         for pid in Self.pollPlan {
-            enqueue(pid.command) { [weak self] reply in
+            // Switch the CAN header when needed (mode-22 PIDs target the BECM).
+            let header = pid.header ?? "7DF"
+            if header != lastHeader {
+                lastHeader = header
+                enqueue("ATSH" + header) { _ in }
+            }
+            enqueue(pid.request) { [weak self] reply in
                 Task { @MainActor in self?.handlePIDReply(pid, reply: reply) }
             }
         }
@@ -285,46 +310,48 @@ final class OBDManager: NSObject, ObservableObject {
             || cleaned.contains("SEARCHING") || cleaned.contains("?") {
             return
         }
-        guard let bytes = Self.dataBytes(from: reply, pid: pid.command),
+        guard let bytes = Self.dataBytes(from: reply, request: pid.request),
               let value = pid.decode(bytes) else { return }
-        readings[pid.command] = OBDReading(command: pid.command, label: pid.label,
+        readings[pid.request] = OBDReading(command: pid.request, label: pid.label,
                                            value: value, unit: pid.unit, systemImage: pid.icon)
     }
 
-    /// Extract the data bytes from a "41 0D 1A …" style reply for a given PID.
-    static func dataBytes(from reply: String, pid: String) -> [Int]? {
-        // The mode-01 echo "41" + the 2-char PID number identifies our row.
-        let respMode = "41"
-        let pidNum = String(pid.dropFirst(2)).uppercased()       // "010D" → "0D"
-        // Normalize: keep only hex pairs across all lines.
+    /// Extract the data bytes from an ELM327 reply for a given request, handling
+    /// both mode-01 ("010D" → "41 0D …") and mode-22 ("2243AF" → "62 43 AF …").
+    static func dataBytes(from reply: String, request: String) -> [Int]? {
+        // Request bytes: "2243AF" → ["22","43","AF"].
+        let reqBytes = stride(from: 0, to: request.count, by: 2).compactMap { off -> String? in
+            let s = request.index(request.startIndex, offsetBy: off)
+            guard let e = request.index(s, offsetBy: 2, limitedBy: request.endIndex) else { return nil }
+            return String(request[s..<e]).uppercased()
+        }
+        guard let modeHex = reqBytes.first, let mode = Int(modeHex, radix: 16) else { return nil }
+        let respMode = String(format: "%02X", mode | 0x40)   // 01→41, 22→62
+        let pidBytes = Array(reqBytes.dropFirst())            // ["43","AF"] or ["0D"]
+
+        // Flatten the whole reply into a stream of 2-char hex byte tokens.
+        var flat: [String] = []
         let tokens = reply
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: ">", with: " ")
             .split(separator: " ")
             .map { String($0).uppercased() }
-
-        // Find the "41" then matching pid, take the rest of that response.
-        var hex: [String] = []
-        if tokens.contains(respMode) {
-            // Tokens may be split or joined; rebuild a flat byte stream.
-            var flat: [String] = []
-            for t in tokens {
-                if t.count == 2, Int(t, radix: 16) != nil { flat.append(t) }
-                else if t.count % 2 == 0, t.allSatisfy({ $0.isHexDigit }) {
-                    flat.append(contentsOf: stride(from: 0, to: t.count, by: 2).map {
-                        let s = t.index(t.startIndex, offsetBy: $0)
-                        let e = t.index(s, offsetBy: 2)
-                        return String(t[s..<e])
-                    })
-                }
-            }
-            if let i = flat.firstIndex(of: respMode), i + 1 < flat.count, flat[i + 1] == pidNum {
-                hex = Array(flat[(i + 2)...])
-            }
+        for t in tokens where t.count % 2 == 0 && t.allSatisfy({ $0.isHexDigit }) {
+            flat.append(contentsOf: stride(from: 0, to: t.count, by: 2).map {
+                let s = t.index(t.startIndex, offsetBy: $0)
+                let e = t.index(s, offsetBy: 2)
+                return String(t[s..<e])
+            })
         }
-        guard !hex.isEmpty else { return nil }
-        return hex.compactMap { Int($0, radix: 16) }
+
+        // Find [respMode, pidBytes…] and return everything after it.
+        let needle = [respMode] + pidBytes
+        guard needle.count <= flat.count else { return nil }
+        for i in 0...(flat.count - needle.count) where Array(flat[i..<i+needle.count]) == needle {
+            return flat[(i + needle.count)...].compactMap { Int($0, radix: 16) }
+        }
+        return nil
     }
 }
 
