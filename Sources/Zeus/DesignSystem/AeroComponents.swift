@@ -99,42 +99,77 @@ struct EnergyRing: View {
     var rangeMiles: Int?
     var isCharging: Bool
 
-    @State private var sweep = false
+    @State private var appear = false
+    @State private var pulse = false
+
+    private var accent: Color { isCharging ? Aero.aurora : Aero.bolt }
+    private var track: LinearGradient { isCharging ? Aero.chargeGradient : Aero.energyGradient }
 
     var body: some View {
         ZStack {
+            // Soft ambient halo behind the ring.
             Circle()
-                .stroke(Color.white.opacity(0.08), lineWidth: 16)
+                .fill(accent.opacity(0.18))
+                .blur(radius: 40)
+                .scaleEffect(pulse ? 1.06 : 0.96)
 
+            // Recessed base groove.
             Circle()
-                .trim(from: 0, to: max(0.001, min(level, 1)))
-                .stroke(
-                    isCharging ? Aero.chargeGradient : Aero.energyGradient,
-                    style: StrokeStyle(lineWidth: 16, lineCap: .round)
-                )
+                .stroke(Color.white.opacity(0.06), lineWidth: 18)
+            Circle()
+                .stroke(Color.black.opacity(0.25), lineWidth: 2)
+                .blur(radius: 1)
+                .padding(9)
+
+            // Progress arc.
+            Circle()
+                .trim(from: 0, to: appear ? max(0.001, min(level, 1)) : 0)
+                .stroke(track, style: StrokeStyle(lineWidth: 18, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .shadow(color: (isCharging ? Aero.aurora : Aero.bolt).opacity(0.8), radius: 16)
+                .shadow(color: accent.opacity(0.85), radius: 14)
 
-            VStack(spacing: 4) {
-                Text("\(Int((level * 100).rounded()))")
-                    .font(.aero(56, weight: .bold))
-                    .foregroundStyle(.white)
-                    + Text("%").font(.aero(24, weight: .bold)).foregroundStyle(Aero.textSecondary)
+            // Thin inner accent hairline.
+            Circle()
+                .trim(from: 0, to: appear ? max(0.001, min(level, 1)) : 0)
+                .stroke(.white.opacity(0.5), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .padding(8)
 
+            VStack(spacing: 2) {
+                HStack(alignment: .top, spacing: 1) {
+                    Text("\(Int((level * 100).rounded()))")
+                        .font(.aero(64, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .contentTransition(.numericText())
+                    Text("%")
+                        .font(.aero(22, weight: .bold))
+                        .foregroundStyle(Aero.textSecondary)
+                        .padding(.top, 8)
+                }
                 if let range = rangeMiles {
-                    Label("\(range) mi", systemImage: "road.lanes")
-                        .font(.aeroCaption)
+                    Text("\(range) mi range")
+                        .font(.aero(13, weight: .semibold))
                         .foregroundStyle(Aero.textSecondary)
                 }
                 if isCharging {
                     Label("Charging", systemImage: "bolt.fill")
-                        .font(.aeroCaption)
+                        .font(.aero(12, weight: .bold))
                         .foregroundStyle(Aero.aurora)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Capsule().fill(Aero.aurora.opacity(0.15)))
+                        .overlay(Capsule().strokeBorder(Aero.aurora.opacity(0.5), lineWidth: 1))
+                        .padding(.top, 2)
                 }
             }
         }
-        .frame(width: 220, height: 220)
-        .padding(8)
+        .frame(width: 224, height: 224)
+        .padding(6)
+        .onAppear {
+            withAnimation(.spring(response: 1.1, dampingFraction: 0.85)) { appear = true }
+            if isCharging {
+                withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) { pulse = true }
+            }
+        }
     }
 }
 
@@ -149,26 +184,37 @@ struct StatCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        HStack(spacing: 12) {
+            // Icon in a tinted, rim-lit chip.
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(accent.opacity(0.16))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(accent.opacity(0.45), lineWidth: 1)
                 Image(systemName: stat.systemImage)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(accent)
                     .symbolRenderingMode(.hierarchical)
+            }
+            .frame(width: 38, height: 38)
+
+            VStack(alignment: .leading, spacing: 2) {
                 Text(stat.label.uppercased())
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
                     .foregroundStyle(Aero.textTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                Text(stat.value)
+                    .font(.aero(19, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
             }
-            Text(stat.value)
-                .font(.aero(20, weight: .bold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .aeroGlass(cornerRadius: 18)
     }
 }
@@ -183,6 +229,64 @@ struct StatGrid: View {
         LazyVGrid(columns: columns, spacing: 12) {
             ForEach(stats) { StatCard(stat: $0) }
         }
+    }
+}
+
+// MARK: - Section header
+
+/// A quiet section label: icon + uppercased title + a fading hairline rule.
+struct SectionHeader: View {
+    let title: String
+    var systemImage: String
+    var tint: Color = Aero.bolt
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(tint)
+            Text(title.uppercased())
+                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .foregroundStyle(Aero.textSecondary)
+                .tracking(1.2)
+            Rectangle()
+                .fill(LinearGradient(colors: [.white.opacity(0.18), .clear],
+                                     startPoint: .leading, endPoint: .trailing))
+                .frame(height: 1)
+        }
+    }
+}
+
+// MARK: - Metric chip (hero key stats)
+
+/// A small glassy key-metric used beside the hero ring.
+struct MetricChip: View {
+    let value: String
+    let label: String
+    var systemImage: String
+    var tint: Color = Aero.bolt
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.aero(16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                Text(label.uppercased())
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(Aero.textTertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.12)))
     }
 }
 

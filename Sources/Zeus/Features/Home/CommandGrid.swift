@@ -30,7 +30,7 @@ struct CommandGrid: View {
                 }
             }
 
-            // Command tiles.
+            // Command tiles, grouped on a glass tray.
             LazyVGrid(columns: columns, spacing: 18) {
                 tile(.lock, active: snap.locked)
                 tile(.unlock, active: !snap.locked, accent: Aero.ember)
@@ -39,6 +39,10 @@ struct CommandGrid: View {
                 tile(.location, accent: Aero.signal)
                 tile(.diagnostics)
             }
+            .padding(.vertical, 18)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+            .aeroGlass(cornerRadius: 24)
         }
     }
 
