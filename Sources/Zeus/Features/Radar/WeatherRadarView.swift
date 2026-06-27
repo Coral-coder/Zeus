@@ -190,7 +190,11 @@ struct RadarMap: UIViewRepresentable {
         // blank gap while the new frame's tiles download.
         let overlay = MKTileOverlay(urlTemplate: urlTemplate)
         overlay.canReplaceMapContent = false
-        overlay.maximumZ = 12
+        // RainViewer only generates radar tiles up to ~zoom 9; beyond that it
+        // returns a "Zoom Level Not Supported" placeholder. Cap here so MapKit
+        // upscales the last real tile instead of requesting unsupported zooms.
+        overlay.maximumZ = 9
+        overlay.tileSize = CGSize(width: 256, height: 256)
         map.addOverlay(overlay, level: .aboveLabels)
         if let old = context.coordinator.overlay {
             // Give the new tiles a moment to load before pulling the old layer.
