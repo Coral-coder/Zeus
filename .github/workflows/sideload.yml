@@ -1,0 +1,221 @@
+name: Sideload (ad-hoc .ipa)
+
+# Builds Zeus as an AD-HOC signed .ipa (installable OTA on devices whose UDID is
+# in the Ad Hoc provisioning profile) and delivers it to the private ipa_sideload
+# installer. Runs ALONGSIDE the TestFlight workflow — it does not replace it.
+#
+# Two independently-skippable delivery mechanisms (both on by default):
+#   (A) Upload MyApp.ipa as a GitHub Actions ARTIFACT. ipa_sideload can list a
+#       repo's artifacts and pull the .ipa straight out of the artifact zip.
+#   (B) POST MyApp.ipa to a running ipa_sideload server so the build instantly
+#       becomes an itms-services:// install link. Only runs if the
+#       SIDELOAD_SERVER_URL + SIDELOAD_PASSWORD secrets are set.
+#
+# Trigger: run manually from the Actions tab (workflow_dispatch). The two toggles
+# below let you skip either delivery mechanism per-run.
+#
+# Required GitHub secrets (same signing set as the TestFlight workflow):
+#   ASC_KEY_ID        App Store Connect API key ID
+#   ASC_ISSUER_ID     Issuer ID from the App Store Connect Keys page
+#   ASC_KEY_CONTENT   contents of the .p8 key (raw PEM, or base64)
+#   OPENCHARGEMAP_KEY Open Charge Map API key (baked into Secrets.plist)
+# NEW secrets, only needed for delivery mechanism (B):
+#   SIDELOAD_SERVER_URL  https base URL of your running ipa_sideload server
+#   SIDELOAD_PASSWORD    that server's APP_PASSWORD
+# Team ID lives in fastlane/Appfile (not secret).
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: "Upload the .ipa as a GitHub Actions artifact (mechanism A)"
+        type: boolean
+        default: true
+      push_to_server:
+        description: "POST the .ipa to SIDELOAD_SERVER_URL (mechanism B, needs secrets)"
+        type: boolean
+        default: true
+
+# Share the TestFlight workflow's concurrency group. Both lanes revoke stale
+# Apple Distribution certs at the start of each run, so they must never run at
+# the same time or they'd revoke each other's freshly-minted signing cert.
+concurrency:
+  group: testflight-upload
+  cancel-in-progress: false
+
+jobs:
+  adhoc:
+    name: Build ad-hoc .ipa & deliver to sideloader
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      SIDELOAD_SERVER_URL: ${{ secrets.SIDELOAD_SERVER_URL }}
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      FASTLANE_HIDE_CHANGELOG: "1"
+      LC_ALL: en_US.UTF-8
+      LANG: en_US.UTF-8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Write Secrets.plist (Open Charge Map key)
+        env:
+          OPENCHARGEMAP_KEY: ${{ secrets.OPENCHARGEMAP_KEY }}
+        run: |
+          set -euo pipefail
+          PL="Sources/Zeus/Resources/Secrets.plist"
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+            echo '<plist version="1.0"><dict>'
+            echo '<key>OpenChargeMapKey</key>'
+            printf '<string>%s</string>\n' "${OPENCHARGEMAP_KEY:-}"
+            echo '</dict></plist>'
+          } > "$PL"
+          echo "Secrets.plist written (key present: $([ -n "${OPENCHARGEMAP_KEY:-}" ] && echo yes || echo NO))"
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Write App Store Connect API key
+        env:
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          # Accept either raw PEM (-----BEGIN PRIVATE KEY-----) or a base64 blob.
+          if printf '%s' "$ASC_KEY_CONTENT" | grep -q "BEGIN"; then
+            printf '%s\n' "$ASC_KEY_CONTENT" > "$KEY_PATH"
+          else
+            printf '%s' "$ASC_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+          fi
+          echo "ASC_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Create signing keychain
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="ci-build-keychain"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYCHAIN_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Neutralize App Intents SSU training (toolchain bug on Xcode 26.x)
+        # appintentsnltrainingprocessor fails with "Unable to parse Info.plist"
+        # regardless of plist contents on this toolchain. It only builds Spotlight
+        # SSU search-suggestion assets — App Intents *metadata* (what Siri needs)
+        # is produced by a different tool and is untouched. Stub it to a no-op so
+        # the archive completes with all features intact.
+        run: |
+          set -euo pipefail
+          TC="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          SSU="$TC/appintentsnltrainingprocessor"
+          if [ -f "$SSU" ]; then
+            sudo mv "$SSU" "$SSU.real"
+            printf '#!/bin/bash\nexit 0\n' | sudo tee "$SSU" >/dev/null
+            sudo chmod +x "$SSU"
+            echo "Stubbed appintentsnltrainingprocessor (SSU training) to no-op."
+          else
+            echo "appintentsnltrainingprocessor not found — nothing to stub."
+          fi
+
+      - name: Build ad-hoc .ipa
+        run: bundle exec fastlane ios sideload
+
+      - name: Verify the .ipa exists
+        run: |
+          set -euo pipefail
+          test -f build/MyApp.ipa
+          ls -lh build/MyApp.ipa
+
+      # ── Mechanism A: publish as a GitHub Actions artifact ──────────────────────
+      - name: Upload .ipa as artifact
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zeus-adhoc-ipa
+          path: build/MyApp.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── Mechanism B: POST straight to a running ipa_sideload server ────────────
+      - name: Push .ipa to the sideloader
+        if: ${{ inputs.push_to_server && env.SIDELOAD_SERVER_URL != '' }}
+        env:
+          SIDELOAD_PASSWORD: ${{ secrets.SIDELOAD_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SIDELOAD_PASSWORD:-}" ]; then
+            echo "::notice::SIDELOAD_PASSWORD not set — skipping direct server push (mechanism B)."
+            exit 0
+          fi
+
+          URL="${SIDELOAD_SERVER_URL%/}"          # strip any trailing slash
+          CJ="$RUNNER_TEMP/sideload-cookies.txt"
+          LOGIN_BODY="$RUNNER_TEMP/sideload-login.json"
+          RESP="$RUNNER_TEMP/sideload-response.json"
+
+          # Build the login body with jq so the password is JSON-escaped and never
+          # echoed to the log (GitHub also masks the secret value automatically).
+          jq -Rn --arg p "$SIDELOAD_PASSWORD" '{password: $p}' > "$LOGIN_BODY"
+
+          echo "Authenticating to the sideloader…"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -c "$CJ" -X POST "$URL/api/login" \
+            -H 'Content-Type: application/json' \
+            --data-binary @"$LOGIN_BODY")
+          rm -f "$LOGIN_BODY"
+          if [ "$code" != "200" ]; then
+            echo "::error::Login to sideloader failed (HTTP $code). Check SIDELOAD_SERVER_URL / SIDELOAD_PASSWORD."
+            exit 1
+          fi
+
+          echo "Uploading MyApp.ipa to the sideloader…"
+          code=$(curl -sS -o "$RESP" -w '%{http_code}' \
+            -b "$CJ" -X POST "$URL/api/prepare-upload" \
+            -H 'Content-Type: application/octet-stream' \
+            -H 'x-filename: MyApp.ipa' \
+            --data-binary @build/MyApp.ipa)
+          if [ "$code" != "200" ]; then
+            echo "::error::Upload to sideloader failed (HTTP $code)."
+            cat "$RESP" || true
+            exit 1
+          fi
+
+          # Surface the install link in the run summary. The itms-services://
+          # installLink only opens on the iPhone itself; installPageUrl is the
+          # tap-to-install web page. Neither is a secret (they carry per-build
+          # tokens), so it's fine to print them.
+          PAGE=$(jq -r '.installPageUrl // empty' "$RESP")
+          LINK=$(jq -r '.installLink // empty'    "$RESP")
+          {
+            echo "### 📲 Sideload build ready"
+            echo ""
+            echo "- **Install page:** ${PAGE:-<none returned>}"
+            echo "- **OTA link:** \`${LINK:-<none returned>}\`"
+            echo ""
+            echo "Open the install page in Safari on a registered device to install."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Done. Install page: ${PAGE:-<none returned>}"

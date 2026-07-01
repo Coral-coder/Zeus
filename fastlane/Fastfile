@@ -119,4 +119,118 @@ platform :ios do
       skip_waiting_for_build_processing: true
     )
   end
+
+  desc "Build an ad-hoc signed .ipa for the private OTA sideloader (ipa_sideload)"
+  # Mirrors the `beta` lane's signing setup, but exports with `ad-hoc` instead of
+  # `app-store` and does NOT upload to TestFlight. The result is a single
+  # build/MyApp.ipa that installs over-the-air on any device whose UDID is in the
+  # Ad Hoc provisioning profile. The workflow then hands that .ipa to ipa_sideload
+  # (as an Actions artifact and/or by POSTing it to the running server).
+  #
+  # This lane shares the `testflight-upload` concurrency group with the beta
+  # workflow (see .github/workflows/sideload.yml), so the two never run at once
+  # and can't revoke each other's distribution certificate.
+  lane :sideload do
+    key_id    = ENV.fetch("ASC_KEY_ID")
+    issuer_id = ENV.fetch("ASC_ISSUER_ID")
+    key_path  = ENV.fetch("ASC_API_KEY_PATH") # .p8 written to disk by the workflow
+    team_id   = CredentialsManager::AppfileConfig.try_fetch_value(:team_id)
+
+    api_key = app_store_connect_api_key(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      key_filepath: key_path,
+      in_house: false
+    )
+
+    keychain_name     = ENV.fetch("SIGNING_KEYCHAIN")
+    keychain_password = ENV.fetch("SIGNING_KEYCHAIN_PASSWORD")
+
+    # Ad-hoc builds never reach TestFlight, so there's no "latest build number"
+    # to bump against — use the CI run number for a monotonic-enough value.
+    increment_build_number(xcodeproj: PROJECT, build_number: (ENV["GITHUB_RUN_NUMBER"] || "0").to_i)
+
+    # Same distribution-cert cap dance as `beta`: ephemeral runners mint a fresh
+    # Apple Distribution cert each run, so revoke stale ones first (their private
+    # keys are gone, so they can't sign anyway). Revoking does NOT invalidate
+    # builds already on TestFlight. Ad Hoc export signs with the same "Apple
+    # Distribution" certificate type — only the provisioning profile differs.
+    require "spaceship"
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+      key_id: key_id,
+      issuer_id: issuer_id,
+      filepath: File.expand_path(key_path)
+    )
+    Spaceship::ConnectAPI::Certificate.all.each do |cert|
+      next unless cert.certificate_type.to_s.include?("DISTRIBUTION")
+
+      UI.message("Revoking stale distribution certificate #{cert.id} (#{cert.certificate_type})")
+      begin
+        cert.delete!
+      rescue StandardError => e
+        UI.important("Could not revoke #{cert.id}: #{e.message}")
+      end
+    end
+
+    get_certificates(
+      api_key: api_key,
+      development: false,
+      keychain_path: keychain_name,
+      keychain_password: keychain_password
+    )
+
+    # Make sure both bundle IDs exist (the beta lane also does this; keep the
+    # sideload lane self-sufficient so it works even if beta never ran).
+    existing = Spaceship::ConnectAPI::BundleId.all.map(&:identifier)
+    [[APP_ID, "Zeus Remote"], [WIDGET_ID, "Zeus Widgets"]].each do |bundle_id, name|
+      next if existing.include?(bundle_id)
+
+      UI.message("Registering bundle id #{bundle_id}")
+      Spaceship::ConnectAPI::BundleId.create(
+        name: name,
+        identifier: bundle_id,
+        platform: Spaceship::ConnectAPI::Platform::IOS
+      )
+    end
+
+    # Ad Hoc provisioning profiles embed every device UDID currently registered
+    # on the account. Register your iPhone/iPad UDIDs in the Apple Developer
+    # portal FIRST — a device that isn't in the profile can't install the build.
+    get_provisioning_profile(api_key: api_key, app_identifier: APP_ID, adhoc: true, force: true)
+    name_app = lane_context[SharedValues::SIGH_NAME]
+
+    get_provisioning_profile(api_key: api_key, app_identifier: WIDGET_ID, adhoc: true, force: true)
+    name_widget = lane_context[SharedValues::SIGH_NAME]
+
+    [["Zeus", APP_ID, name_app], ["ZeusWidgets", WIDGET_ID, name_widget]].each do |target, bundle_id, profile|
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path: PROJECT,
+        team_id: team_id,
+        targets: [target],
+        bundle_identifier: bundle_id,
+        code_sign_identity: "Apple Distribution",
+        profile_name: profile
+      )
+    end
+
+    build_app(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Release",
+      export_method: "ad-hoc",
+      output_directory: "build",
+      output_name: "MyApp",
+      export_options: {
+        signingStyle: "manual",
+        teamID: team_id,
+        provisioningProfiles: {
+          APP_ID => name_app,
+          WIDGET_ID => name_widget
+        }
+      }
+    )
+    # build/MyApp.ipa is what the workflow uploads as an artifact and/or POSTs to
+    # the sideloader.
+  end
 end
