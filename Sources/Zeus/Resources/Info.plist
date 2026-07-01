@@ -42,6 +42,55 @@
             </array>
         </dict>
     </array>
+    <!-- Sideloader: allow the app's own loopback HTTPS calls (127.0.0.1 /
+         localhost) to bypass ATS. The OTA fetch is done by installd (a system
+         daemon not bound by this key); this only covers any in-app localhost
+         request. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <!-- Sideloader: let an .ipa opened from Files / Share / Safari downloads be
+         handed to Zeus (routed via onOpenURL to the hidden Sideload panel).
+         LSSupportsOpeningDocumentsInPlace declares how we open those files
+         (silences App Store warning ITMS-90737 for the document type below). -->
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>iOS App Archive</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.apple.itunes.ipa</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.apple.itunes.ipa</string>
+            <key>UTTypeDescription</key>
+            <string>iOS App Archive</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.zip-archive</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>ipa</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Zeus uses your location to find nearby chargers and show your car on the map.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -58,6 +107,10 @@
         <string>processing</string>
         <string>location</string>
         <string>bluetooth-central</string>
+        <!-- Sideloader: silent-audio keep-alive so the local OTA server keeps
+             running while the user is in Safari/Settings doing trust/enroll and
+             while installd fetches the build. -->
+        <string>audio</string>
     </array>
     <key>BGTaskSchedulerPermittedIdentifiers</key>
     <array>

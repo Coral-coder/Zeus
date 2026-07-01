@@ -88,10 +88,19 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             CPListItem(text: "Charging", detailText: snap.isCharging ? "Yes" : "No"),
             CPListItem(text: "Doors", detailText: snap.locked ? "Locked" : "Unlocked")
         ]
-        // Live OBD parameters appear here when the reader is connected.
-        for param in OBDManager.shared.latestReadable {
-            rows.append(CPListItem(text: param.label, detailText: param.formatted))
+        // Everything else OnStar reported.
+        let shown: Set<String> = ["Battery", "Range"]
+        for stat in snap.stats ?? [] where !shown.contains(stat.label) {
+            rows.append(CPListItem(text: stat.label, detailText: stat.value))
         }
-        dashboardTemplate.updateSections([CPListSection(items: rows)])
+        var sections = [CPListSection(items: rows, header: "OnStar", sectionIndexTitle: nil)]
+
+        // Live OBD parameters, when the reader is connected.
+        let live = OBDManager.shared.latestReadable
+        if !live.isEmpty {
+            let liveRows = live.map { CPListItem(text: $0.label, detailText: $0.formatted) }
+            sections.append(CPListSection(items: liveRows, header: "Live (OBD)", sectionIndexTitle: nil))
+        }
+        dashboardTemplate.updateSections(sections)
     }
 }

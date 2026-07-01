@@ -50,13 +50,16 @@ actor OnStarClient {
     // MARK: - Vehicles
 
     func vehicles() async throws -> [Vehicle] {
-        let data = try await get(GMAPI.vehiclesURL())
+        // The garage list is a GraphQL POST with a plain-text body.
+        let data = try await postRaw(GMAPI.garageURL,
+                                     body: GMAPI.garageQuery,
+                                     contentType: "text/plain; charset=utf-8")
         return try VehicleResponseParser.parseVehicles(data)
     }
 
     func diagnostics(vin: String) async throws -> VehicleSnapshot {
-        let payload = try await runCommand(.diagnostics, vin: vin, body: DiagnosticsRequest.full)
-        return try VehicleResponseParser.parseSnapshot(payload, vin: vin)
+        let payload = try await get(GMAPI.healthStatusURL(vin: vin))
+        return try VehicleResponseParser.parseHealthStatus(payload, vin: vin)
     }
 
     // MARK: - Commands
@@ -111,12 +114,22 @@ actor OnStarClient {
         return try await send(req)
     }
 
+    private func postRaw(_ url: URL, body: String, contentType: String) async throws -> Data {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data(body.utf8)
+        return try await send(req)
+    }
+
     private func send(_ request: URLRequest) async throws -> Data {
         var req = request
         let bearer = try await validToken()
         req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("zeus-ios", forHTTPHeaderField: "User-Agent")
+        // GM's mobile API expects its own app headers; without them it 404s/403s.
+        for (k, v) in GMAPI.commonHeaders where req.value(forHTTPHeaderField: k) == nil {
+            req.setValue(v, forHTTPHeaderField: k)
+        }
 
         let (data, resp) = try await session.data(for: req)
         let http = resp as! HTTPURLResponse

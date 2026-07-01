@@ -6,9 +6,32 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
 
+# Swift packages for the on-device sideloader feature (app target only — the
+# widget extension does not use them). ZIPFoundation reads Info.plist out of an
+# .ipa; swift-certificates/-crypto/-asn1 mint the self-signed TLS identity that
+# lets Zeus host the local OTA install server iOS's installd can trust.
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: "0.9.0"
+  swift-certificates:
+    url: https://github.com/apple/swift-certificates
+    from: "1.0.0"
+  swift-crypto:
+    url: https://github.com/apple/swift-crypto
+    from: "3.0.0"
+  swift-asn1:
+    url: https://github.com/apple/swift-asn1
+    from: "1.0.0"
+  # OpenSSL (precompiled xcframework) — the crypto zsign links against to
+  # re-sign apps on-device. App target only.
+  OpenSSL:
+    url: https://github.com/krzyzanowskim/OpenSSL
+    from: "3.1.5000"
+
 settings:
   base:
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.3.6"
     CURRENT_PROJECT_VERSION: "1"
     VERSIONING_SYSTEM: "apple-generic"
     SWIFT_VERSION: "5.10"
@@ -43,6 +66,41 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Sources/Zeus/Resources/Zeus.entitlements
     dependencies:
       - target: ZeusWidgets
+      - target: CZsign
+      - package: ZIPFoundation
+      - package: swift-certificates
+        product: X509
+      - package: swift-crypto
+        product: Crypto
+      - package: swift-asn1
+        product: SwiftASN1
+      - package: OpenSSL
+        product: OpenSSL
+
+  # Vendored zsign (C/C++) that re-signs an extracted .app folder in-process,
+  # wrapped by an Objective-C++ bridge (ZsignBridge) that Swift imports.
+  CZsign:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/CZsign
+    settings:
+      base:
+        CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
+        CLANG_CXX_LIBRARY: "libc++"
+        GCC_C_LANGUAGE_STANDARD: "gnu11"
+        DEFINES_MODULE: YES
+        MODULEMAP_FILE: Sources/CZsign/include/module.modulemap
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Sources/CZsign/include"
+          - "$(SRCROOT)/Sources/CZsign/zsign"
+          - "$(SRCROOT)/Sources/CZsign/zsign/common"
+        # zsign is third-party C/C++; don't fail our build on its warnings.
+        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+        CLANG_WARN_DOCUMENTATION_COMMENTS: NO
+    dependencies:
+      - package: OpenSSL
+        product: OpenSSL
 
   ZeusWidgets:
     type: app-extension
