@@ -24,7 +24,15 @@ final class KeepAlive {
 
             guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
                   let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else { return }
-            buffer.frameLength = buffer.frameCapacity   // zero-filled → silence
+            buffer.frameLength = buffer.frameCapacity
+            // A pure-zero buffer can be treated as "not playing" and let iOS
+            // suspend us. Write an inaudible but non-zero signal so the audio
+            // background assertion actually holds and the server keeps running.
+            if let ch = buffer.floatChannelData?[0] {
+                for i in 0..<Int(buffer.frameLength) {
+                    ch[i] = (i % 2 == 0 ? 1.0 : -1.0) * 0.00002   // ~ -94 dBFS
+                }
+            }
 
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: format)

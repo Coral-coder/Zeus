@@ -18,6 +18,8 @@ final class LoopbackServer {
     private let router: (_ method: String, _ path: String, _ query: [String: String], _ body: Data) -> HTTPResponse
 
     private(set) var isRunning = false
+    /// Called (on the server queue) when the listener becomes ready or stops.
+    var onStateChange: ((Bool) -> Void)?
 
     init(port: UInt16, router: @escaping (_ method: String, _ path: String, _ query: [String: String], _ body: Data) -> HTTPResponse) {
         self.port = port
@@ -45,8 +47,8 @@ final class LoopbackServer {
         listener.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .ready: self?.isRunning = true
-            case .failed, .cancelled: self?.isRunning = false
+            case .ready: self?.isRunning = true; self?.onStateChange?(true)
+            case .failed, .cancelled: self?.isRunning = false; self?.onStateChange?(false)
             default: break
             }
         }

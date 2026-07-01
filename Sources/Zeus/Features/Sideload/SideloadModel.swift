@@ -36,7 +36,14 @@ final class SideloadModel: ObservableObject {
     // MARK: - Server lifecycle
 
     func startServer() {
-        guard server == nil else { serverReady = server?.isRunning ?? false; return }
+        // Already up and listening — nothing to do.
+        if let s = server, s.isRunning { serverReady = true; keepAlive.start(); return }
+        // A stale/dead listener (killed while the app was backgrounded) — tear it
+        // down and recreate, otherwise we'd report "ready" on a dead socket and
+        // installd/Safari would hit "cannot connect".
+        server?.stop()
+        server = nil
+        serverReady = false
         do {
             let result = try LoopbackIdentity.ensure()
             let store = self.store
@@ -47,15 +54,27 @@ final class SideloadModel: ObservableObject {
                 SideloadModel.route(method: method, path: path, query: query, body: body,
                                     store: store, certDER: certDER, port: port, capture: capture)
             }
+            server.onStateChange = { [weak self] ready in
+                Task { @MainActor in self?.serverReady = ready }
+            }
             try server.start(identity: result.identity)
             self.server = server
-            serverReady = true
             keepAlive.start()   // keep the server alive while backgrounded
-            status = "Local install server ready."
+            status = "Starting local install server…"
         } catch {
             serverReady = false
             status = "Couldn't start local server: \(error.localizedDescription)"
         }
+    }
+
+    /// (Re)start the server if needed and wait until it's genuinely listening.
+    private func ensureServerReady() async -> Bool {
+        startServer()
+        for _ in 0..<40 {   // up to ~4s
+            if server?.isRunning == true { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return server?.isRunning == true
     }
 
     func stopServer() {
@@ -231,9 +250,13 @@ final class SideloadModel: ObservableObject {
     }
 
     func openEnroll() {
-        if server == nil { startServer() }
-        guard let server, let url = URL(string: "\(server.baseURL)/enroll") else { return }
-        UIApplication.shared.open(url)
+        Task {
+            guard await ensureServerReady(), let server,
+                  let url = URL(string: "\(server.baseURL)/enroll") else {
+                status = "Local server didn't come up — try again."; return
+            }
+            UIApplication.shared.open(url)
+        }
     }
 
     /// Pull the latest captured UDID into the published property for the UI.
@@ -255,26 +278,32 @@ final class SideloadModel: ObservableObject {
     // MARK: - Install / trust / delete
 
     func install(_ install: SideloadInstall) {
-        guard let server, serverReady else {
-            startServer()
-            status = "Starting server — tap Install again in a moment."
-            return
-        }
-        let manifestURL = "\(server.baseURL)/i/\(install.id)/manifest.plist?t=\(install.installToken)"
-        guard let url = URL(string: ManifestBuilder.installLink(manifestURL: manifestURL)) else { return }
-        beginBackground()
-        UIApplication.shared.open(url) { [weak self] ok in
-            Task { @MainActor in
-                self?.status = ok ? "Requested install of \(install.title)…"
-                                  : "iOS refused the install link."
+        Task {
+            status = "Preparing install…"
+            guard await ensureServerReady(), let server else {
+                status = "Local server didn't come up — reopen Sideload and try again."
+                return
+            }
+            beginBackground()   // keep serving through the install fetch
+            let manifestURL = "\(server.baseURL)/i/\(install.id)/manifest.plist?t=\(install.installToken)"
+            guard let url = URL(string: ManifestBuilder.installLink(manifestURL: manifestURL)) else { return }
+            UIApplication.shared.open(url) { [weak self] ok in
+                Task { @MainActor in
+                    self?.status = ok ? "Requested install of \(install.title)…"
+                                      : "iOS refused the install link."
+                }
             }
         }
     }
 
     func openTrust() {
-        if server == nil { startServer() }
-        guard let server, let url = URL(string: "\(server.baseURL)/trust") else { return }
-        UIApplication.shared.open(url)
+        Task {
+            guard await ensureServerReady(), let server,
+                  let url = URL(string: "\(server.baseURL)/trust") else {
+                status = "Local server didn't come up — try again."; return
+            }
+            UIApplication.shared.open(url)
+        }
     }
 
     func delete(_ install: SideloadInstall) {
