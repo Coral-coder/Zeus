@@ -5,30 +5,30 @@ import Crypto
 import X509
 import SwiftASN1
 
-/// Mints and persists the self-signed TLS identity that lets Zeus host a local
-/// HTTPS server iOS's install daemon can trust.
+/// Mints and persists the TLS identity that lets Zeus host a local HTTPS server
+/// iOS's install daemon will trust.
 ///
-/// This is the native equivalent of `ipa_sideload`'s `src/tls.js`: a long-lived
-/// self-signed **CA** certificate (so it can be installed as a trusted root via
-/// a configuration profile) covering `localhost` / `127.0.0.1`.
-///
-/// The tricky part on iOS is turning a cert + private key into a `SecIdentity`
-/// usable by Network.framework:
-///   1. Generate a P-256 keypair with swift-crypto (in memory).
-///   2. Build + self-sign the X.509 CA cert over that key with swift-certificates.
-///   3. Import the private key AND the certificate into the keychain.
-///   4. The keychain automatically pairs them into a `SecIdentity`, which we
-///      fetch with a `kSecClassIdentity` query and wrap as a `sec_identity_t`.
-/// Everything persists, so trusting the root once is enough across launches.
+/// iOS's installd is stricter than Safari: it will not accept a CA certificate
+/// used directly as the server (leaf) certificate. So we build a proper little
+/// PKI:
+///   • a self-signed **root CA** (this is what you trust via the profile), and
+///   • a **leaf** server cert *signed by that root*, covering localhost /
+///     127.0.0.1 with the serverAuth EKU — this is what the server presents.
+/// The device trusts the root once; installd validates leaf → root → trusted.
 enum LoopbackIdentity {
-    private static let service = "com.lightwave.zeus.sideload"
-    private static let keyTag = "com.lightwave.zeus.sideload.tlskey".data(using: .utf8)!
-    private static let certLabel = "Zeus Local Root"
+    // v2 = leaf-under-root scheme (v1 was a single CA-as-leaf cert).
+    private static let leafKeyTag = "com.lightwave.zeus.sideload.leafkey.v2".data(using: .utf8)!
+    private static let leafCertLabel = "Zeus Local Server"
+    private static let rootCertLabel = "Zeus Local Root CA"
+    // Old v1 keychain labels/tag, cleaned up on regeneration.
+    private static let v1KeyTag = "com.lightwave.zeus.sideload.tlskey".data(using: .utf8)!
+    private static let v1CertLabel = "Zeus Local Root"
 
     enum IdentityError: LocalizedError {
         case keyImport(OSStatus)
         case certCreate
         case identityLookup(OSStatus)
+        case rootMissing
         case secIdentity
 
         var errorDescription: String? {
@@ -36,25 +36,25 @@ enum LoopbackIdentity {
             case .keyImport(let s): return "Could not import the signing key (OSStatus \(s))."
             case .certCreate: return "Could not build the local certificate."
             case .identityLookup(let s): return "Could not read the TLS identity (OSStatus \(s))."
+            case .rootMissing: return "Local root certificate not found."
             case .secIdentity: return "Could not create a TLS identity for the local server."
             }
         }
     }
 
-    /// The identity plus the certificate DER (needed to build the trust profile).
+    /// The leaf identity the server presents, plus the ROOT certificate DER
+    /// (what the trust profile installs).
     struct Result {
         let identity: SecIdentity
-        let certificateDER: Data
+        let certificateDER: Data   // the ROOT cert (for the trust profile)
     }
 
-    /// Return the existing identity, or create + persist a fresh one.
     static func ensure() throws -> Result {
         if let existing = try? load() { return existing }
         try generateAndStore()
         return try load()
     }
 
-    /// A `sec_identity_t` for NWListener TLS options.
     static func secIdentity(from identity: SecIdentity) throws -> sec_identity_t {
         guard let sec = sec_identity_create(identity) else { throw IdentityError.secIdentity }
         return sec
@@ -63,104 +63,140 @@ enum LoopbackIdentity {
     // MARK: - Keychain lookup
 
     private static func load() throws -> Result {
+        // The leaf identity (only identity we plant — the root has no private key).
         let query: [String: Any] = [
             kSecClass as String: kSecClassIdentity,
             kSecReturnRef as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            // Zeus holds no other identities, so match the single one we planted.
-            kSecAttrApplicationLabel as String: keyTag
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var out: CFTypeRef?
-        var status = SecItemCopyMatching(query as CFDictionary, &out)
-        if status != errSecSuccess {
-            // Fall back to an unconstrained identity lookup (some iOS versions
-            // don't index identities by the key's application label).
-            var loose = query
-            loose.removeValue(forKey: kSecAttrApplicationLabel as String)
-            status = SecItemCopyMatching(loose as CFDictionary, &out)
-        }
-        guard status == errSecSuccess, let ref = out else {
-            throw IdentityError.identityLookup(status)
-        }
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        guard status == errSecSuccess, let ref = out else { throw IdentityError.identityLookup(status) }
         let identity = ref as! SecIdentity
 
-        var cert: SecCertificate?
-        let cs = SecIdentityCopyCertificate(identity, &cert)
-        guard cs == errSecSuccess, let cert, let der = SecCertificateCopyData(cert) as Data? else {
-            throw IdentityError.identityLookup(cs)
-        }
-        return Result(identity: identity, certificateDER: der)
+        // The ROOT cert (kept in the keychain without a key) — for the profile.
+        guard let rootDER = rootCertificateDER() else { throw IdentityError.rootMissing }
+        return Result(identity: identity, certificateDER: rootDER)
+    }
+
+    private static func rootCertificateDER() -> Data? {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: rootCertLabel,
+            kSecReturnRef as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let ref = out else { return nil }
+        return SecCertificateCopyData(ref as! SecCertificate) as Data?
     }
 
     // MARK: - Generation
 
     private static func generateAndStore() throws {
-        // 1. Keypair (swift-crypto, in memory).
-        let privateKey = P256.Signing.PrivateKey()
-        let certKey = Certificate.PrivateKey(privateKey)
+        cleanup()
 
-        // 2. Self-signed CA cert covering localhost + 127.0.0.1.
-        let name = try DistinguishedName { CommonName(certLabel) }
         let now = Date()
-        var serial = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, serial.count, &serial)
+        let notBefore = now.addingTimeInterval(-3600)
+        let notAfter = now.addingTimeInterval(60 * 60 * 24 * 3650)
 
-        let cert = try Certificate(
+        // 1. Root CA (self-signed). Its private key is used only to sign the leaf
+        //    and is then discarded — the root lives on as a trusted anchor.
+        let rootKey = P256.Signing.PrivateKey()
+        let rootCertKey = Certificate.PrivateKey(rootKey)
+        let rootName = try DistinguishedName { CommonName("Zeus Local Root") }
+        let rootCert = try Certificate(
             version: .v3,
-            serialNumber: Certificate.SerialNumber(bytes: serial),
-            publicKey: certKey.publicKey,
-            notValidBefore: now.addingTimeInterval(-3600),
-            notValidAfter: now.addingTimeInterval(60 * 60 * 24 * 3650),
-            issuer: name,
-            subject: name,
+            serialNumber: randomSerial(),
+            publicKey: rootCertKey.publicKey,
+            notValidBefore: notBefore, notValidAfter: notAfter,
+            issuer: rootName, subject: rootName,
             signatureAlgorithm: .ecdsaWithSHA256,
             extensions: try Certificate.Extensions {
                 Critical(BasicConstraints.isCertificateAuthority(maxPathLength: nil))
                 Critical(KeyUsage(digitalSignature: true, keyCertSign: true))
+            },
+            issuerPrivateKey: rootCertKey
+        )
+        let rootDER = Data(try rootCert.serializeAsPEM().derBytes)
+
+        // 2. Leaf server cert, SIGNED BY THE ROOT, covering localhost/127.0.0.1.
+        let leafKey = P256.Signing.PrivateKey()
+        let leafCertKey = Certificate.PrivateKey(leafKey)
+        let leafName = try DistinguishedName { CommonName("Zeus Local Server") }
+        let leafCert = try Certificate(
+            version: .v3,
+            serialNumber: randomSerial(),
+            publicKey: leafCertKey.publicKey,
+            notValidBefore: notBefore, notValidAfter: notAfter,
+            issuer: rootName, subject: leafName,
+            signatureAlgorithm: .ecdsaWithSHA256,
+            extensions: try Certificate.Extensions {
+                Critical(BasicConstraints.notCertificateAuthority)
+                KeyUsage(digitalSignature: true)
                 try ExtendedKeyUsage([.serverAuth])
                 SubjectAlternativeNames([
                     .dnsName("localhost"),
                     .ipAddress(ASN1OctetString(contentBytes: ArraySlice<UInt8>([127, 0, 0, 1])))
                 ])
             },
-            issuerPrivateKey: certKey
+            issuerPrivateKey: rootCertKey   // ← issued by the root
         )
+        let leafDER = Data(try leafCert.serializeAsPEM().derBytes)
 
-        let der = Data(try cert.serializeAsPEM().derBytes)
-
-        // 3a. Import the private key into the keychain (kSecClassKey), tagged so
-        //     we can find it and so it pairs with the cert into an identity.
-        let secKey = try importPrivateKey(privateKey)
+        // 3. Import the LEAF key + LEAF cert → forms the leaf SecIdentity.
+        let secLeafKey = try importPrivateKey(leafKey)
         let addKey: [String: Any] = [
             kSecClass as String: kSecClassKey,
-            kSecAttrApplicationTag as String: keyTag,
+            kSecAttrApplicationTag as String: leafKeyTag,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecValueRef as String: secKey,
+            kSecValueRef as String: secLeafKey,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
-        SecItemDelete(addKey as CFDictionary)
         let ks = SecItemAdd(addKey as CFDictionary, nil)
         guard ks == errSecSuccess || ks == errSecDuplicateItem else { throw IdentityError.keyImport(ks) }
 
-        // 3b. Import the certificate (kSecClassCertificate).
-        guard let secCert = SecCertificateCreateWithData(nil, der as CFData) else {
+        guard let secLeafCert = SecCertificateCreateWithData(nil, leafDER as CFData) else {
             throw IdentityError.certCreate
         }
-        let addCert: [String: Any] = [
+        let cl = SecItemAdd([
             kSecClass as String: kSecClassCertificate,
-            kSecValueRef as String: secCert,
-            kSecAttrLabel as String: certLabel
-        ]
-        SecItemDelete([
+            kSecValueRef as String: secLeafCert,
+            kSecAttrLabel as String: leafCertLabel
+        ] as CFDictionary, nil)
+        guard cl == errSecSuccess || cl == errSecDuplicateItem else { throw IdentityError.certCreate }
+
+        // 4. Store the ROOT cert (no key) so we can build the trust profile.
+        guard let secRootCert = SecCertificateCreateWithData(nil, rootDER as CFData) else {
+            throw IdentityError.certCreate
+        }
+        let cr = SecItemAdd([
             kSecClass as String: kSecClassCertificate,
-            kSecAttrLabel as String: certLabel
-        ] as CFDictionary)
-        let cs = SecItemAdd(addCert as CFDictionary, nil)
-        guard cs == errSecSuccess || cs == errSecDuplicateItem else { throw IdentityError.certCreate }
+            kSecValueRef as String: secRootCert,
+            kSecAttrLabel as String: rootCertLabel
+        ] as CFDictionary, nil)
+        guard cr == errSecSuccess || cr == errSecDuplicateItem else { throw IdentityError.certCreate }
     }
 
-    /// Turn a swift-crypto P-256 private key into a keychain-importable `SecKey`
-    /// via its X9.63 representation (0x04 || X || Y || private scalar).
+    /// Remove any prior sideload keychain items (v1 single-cert scheme and any
+    /// partial v2) so regeneration is clean.
+    private static func cleanup() {
+        for tag in [leafKeyTag, v1KeyTag] {
+            SecItemDelete([kSecClass as String: kSecClassKey,
+                           kSecAttrApplicationTag as String: tag] as CFDictionary)
+        }
+        for label in [leafCertLabel, rootCertLabel, v1CertLabel] {
+            SecItemDelete([kSecClass as String: kSecClassCertificate,
+                           kSecAttrLabel as String: label] as CFDictionary)
+        }
+    }
+
+    private static func randomSerial() -> Certificate.SerialNumber {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Certificate.SerialNumber(bytes: bytes)
+    }
+
     private static func importPrivateKey(_ key: P256.Signing.PrivateKey) throws -> SecKey {
         let attrs: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
