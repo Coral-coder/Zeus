@@ -117,7 +117,7 @@ enum LoopbackIdentity {
             extensions: try Certificate.Extensions {
                 Critical(BasicConstraints.isCertificateAuthority(maxPathLength: nil))
                 Critical(KeyUsage(digitalSignature: true, keyCertSign: true))
-                ExtendedKeyUsage([.serverAuth])
+                try ExtendedKeyUsage([.serverAuth])
                 SubjectAlternativeNames([
                     .dnsName("localhost"),
                     .ipAddress(ASN1OctetString(contentBytes: ArraySlice<UInt8>([127, 0, 0, 1])))
