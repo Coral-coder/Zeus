@@ -42,6 +42,51 @@
             </array>
         </dict>
     </array>
+    <!-- Sideloader: allow the app's own loopback HTTPS calls (127.0.0.1 /
+         localhost) to bypass ATS. The OTA fetch is done by installd (a system
+         daemon not bound by this key); this only covers any in-app localhost
+         request. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <!-- Sideloader: let an .ipa opened from Files / Share / Safari downloads be
+         handed to Zeus (routed via onOpenURL to the hidden Sideload panel). -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>iOS App Archive</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.apple.itunes.ipa</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.apple.itunes.ipa</string>
+            <key>UTTypeDescription</key>
+            <string>iOS App Archive</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.zip-archive</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>ipa</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Zeus uses your location to find nearby chargers and show your car on the map.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
