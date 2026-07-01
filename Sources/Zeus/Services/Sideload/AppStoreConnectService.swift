@@ -60,8 +60,25 @@ struct AppStoreConnectService {
     // MARK: - REST
 
     @discardableResult
+    /// Build the request URL. `path` may include a query string; we must NOT run
+    /// it through appendingPathComponent (that percent-encodes "?" into the path,
+    /// which Apple rejects as PATH_ERROR). Split path vs query and let
+    /// URLComponents encode the query (incl. filter[...] brackets) correctly.
+    private func url(for path: String) -> URL {
+        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) ?? URLComponents()
+        let parts = path.split(separator: "?", maxSplits: 1).map(String.init)
+        comps.path = base.path + "/" + parts[0]
+        if parts.count > 1 {
+            comps.queryItems = parts[1].split(separator: "&").map { pair in
+                let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                return URLQueryItem(name: kv[0], value: kv.count > 1 ? kv[1] : "")
+            }
+        }
+        return comps.url ?? base
+    }
+
     private func send(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
-        var req = URLRequest(url: base.appendingPathComponent(path))
+        var req = URLRequest(url: url(for: path))
         req.httpMethod = method
         req.setValue("Bearer \(try token())", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
