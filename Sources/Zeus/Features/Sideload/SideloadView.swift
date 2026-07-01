@@ -12,6 +12,8 @@ struct SideloadView: View {
     @State private var urlText = ""
     @State private var showTrust = false
     @State private var showSignIn = false
+    @State private var showUDIDPrompt = false
+    @State private var udidText = ""
 
     private var ipaContentTypes: [UTType] {
         if let t = UTType(filenameExtension: "ipa") { return [t] }
@@ -70,6 +72,15 @@ struct SideloadView: View {
                     .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showSignIn = false } } }
             }
         }
+        .alert("Enter device UDID", isPresented: $showUDIDPrompt) {
+            TextField("00008030-000…  or  40 hex chars", text: $udidText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Set") { sideload.setManualUDID(udidText) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Paste this device's UDID. Get it from your Apple Developer account (Devices) or a UDID service — then Zeus registers it and signs for this device.")
+        }
     }
 
     // MARK: - Sections
@@ -110,9 +121,15 @@ struct SideloadView: View {
                     sideload.openEnroll()
                 }
 
-                Text("Do these in order — Trust before Enroll (the enroll step needs the certificate trusted first). Then every build you add is signed for your device and installed automatically — no importing.")
+                Text("Do these in order — Trust before Enroll. Then every build you add is signed for your device and installed automatically.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(Aero.textTertiary)
+
+                if sideload.udid == nil {
+                    Button("Enrollment failing? Enter UDID manually") { udidText = ""; showUDIDPrompt = true }
+                        .font(.aeroCaption)
+                        .foregroundStyle(Aero.bolt)
+                }
             }
         }
     }
