@@ -19,8 +19,13 @@ final class SideloadModel: ObservableObject {
     private let store = SideloadStore()
     private var server: LoopbackServer?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
+    /// Captures the device UDID reported by the enrollment profile (see DeviceEnrollment).
+    let enrollment = UDIDCapture()
 
     init() { installs = store.list() }
+
+    /// The captured device UDID, if the enrollment profile has been installed.
+    var capturedUDID: String? { enrollment.udid }
 
     // MARK: - Server lifecycle
 
@@ -31,9 +36,10 @@ final class SideloadModel: ObservableObject {
             let store = self.store
             let port = self.port
             let certDER = result.certificateDER
-            let server = LoopbackServer(port: port) { method, path, query in
-                SideloadModel.route(method: method, path: path, query: query,
-                                    store: store, certDER: certDER, port: port)
+            let capture = self.enrollment
+            let server = LoopbackServer(port: port) { method, path, query, body in
+                SideloadModel.route(method: method, path: path, query: query, body: body,
+                                    store: store, certDER: certDER, port: port, capture: capture)
             }
             try server.start(identity: result.identity)
             self.server = server
@@ -54,8 +60,9 @@ final class SideloadModel: ObservableObject {
 
     // MARK: - Router (runs off the main actor on the server's queue)
 
-    nonisolated private static func route(method: String, path: String, query: [String: String],
-                                          store: SideloadStore, certDER: Data, port: UInt16) -> HTTPResponse {
+    nonisolated private static func route(method: String, path: String, query: [String: String], body: Data,
+                                          store: SideloadStore, certDER: Data, port: UInt16,
+                                          capture: UDIDCapture) -> HTTPResponse {
         let base = "https://127.0.0.1:\(port)"
 
         if path == "/trust" {
@@ -66,6 +73,18 @@ final class SideloadModel: ObservableObject {
                                  body: Data(TrustProfileBuilder.mobileconfig(certificateDER: certDER).utf8))
             r.headers["Content-Disposition"] = "attachment; filename=\"zeus-sideload.mobileconfig\""
             return r
+        }
+
+        // Device UDID enrollment (see DeviceEnrollment).
+        if path == "/enroll" {
+            var r = HTTPResponse(contentType: "application/x-apple-aspen-config",
+                                 body: Data(EnrollmentProfile.mobileconfig(postURL: "\(base)/enroll/receive").utf8))
+            r.headers["Content-Disposition"] = "attachment; filename=\"zeus-enroll.mobileconfig\""
+            return r
+        }
+        if path == "/enroll/receive" {
+            if let udid = EnrollmentResponse.parseUDID(from: body) { capture.udid = udid }
+            return .text("ok")
         }
 
         // /i/<id>/manifest.plist  or  /i/<id>/app.ipa  (token-gated, no session)

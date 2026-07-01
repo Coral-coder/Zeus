@@ -15,11 +15,11 @@ final class LoopbackServer {
     let port: UInt16
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.lightwave.zeus.sideload.server")
-    private let router: (_ method: String, _ path: String, _ query: [String: String]) -> HTTPResponse
+    private let router: (_ method: String, _ path: String, _ query: [String: String], _ body: Data) -> HTTPResponse
 
     private(set) var isRunning = false
 
-    init(port: UInt16, router: @escaping (_ method: String, _ path: String, _ query: [String: String]) -> HTTPResponse) {
+    init(port: UInt16, router: @escaping (_ method: String, _ path: String, _ query: [String: String], _ body: Data) -> HTTPResponse) {
         self.port = port
         self.router = router
     }
@@ -68,12 +68,22 @@ final class LoopbackServer {
     }
 
     private func receive(_ conn: NWConnection, buffer: Data) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { conn.cancel(); return }
             var buf = buffer
             if let data { buf.append(data) }
             if let end = Self.headerEnd(in: buf) {
-                self.respond(conn, head: buf.subdata(in: buf.startIndex..<end))
+                let head = buf.subdata(in: buf.startIndex..<end)
+                let needed = Self.contentLength(inHead: head)
+                let have = buf.count - end
+                if have >= needed {
+                    let body = needed > 0 ? buf.subdata(in: end..<(end + needed)) : Data()
+                    self.respond(conn, head: head, body: body)
+                    return
+                }
+                // POST body not fully arrived yet — keep reading (cap ~64MB).
+                if isComplete || error != nil || buf.count > 64_000_000 { conn.cancel(); return }
+                self.receive(conn, buffer: buf)
                 return
             }
             if isComplete || error != nil || buf.count > 1_000_000 { conn.cancel(); return }
@@ -81,14 +91,25 @@ final class LoopbackServer {
         }
     }
 
-    private func respond(_ conn: NWConnection, head: Data) {
+    private func respond(_ conn: NWConnection, head: Data, body: Data) {
         let text = String(decoding: head, as: UTF8.self)
         let firstLine = text.split(separator: "\r\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
         let parts = firstLine.split(separator: " ")
         let method = parts.count > 0 ? String(parts[0]) : "GET"
         let target = parts.count > 1 ? String(parts[1]) : "/"
         let (path, query) = Self.parseTarget(target)
-        send(conn, router(method, path, query))
+        send(conn, router(method, path, query, body))
+    }
+
+    private static func contentLength(inHead head: Data) -> Int {
+        let text = String(decoding: head, as: UTF8.self)
+        for line in text.split(separator: "\r\n") {
+            let kv = line.split(separator: ":", maxSplits: 1)
+            if kv.count == 2, kv[0].lowercased().trimmingCharacters(in: .whitespaces) == "content-length" {
+                return Int(kv[1].trimmingCharacters(in: .whitespaces)) ?? 0
+            }
+        }
+        return 0
     }
 
     private func send(_ conn: NWConnection, _ response: HTTPResponse) {
