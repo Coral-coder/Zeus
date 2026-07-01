@@ -11,6 +11,7 @@ struct SideloadView: View {
     @State private var showURLPrompt = false
     @State private var urlText = ""
     @State private var showTrust = false
+    @State private var showSignIn = false
 
     private var ipaContentTypes: [UTType] {
         if let t = UTType(filenameExtension: "ipa") { return [t] }
@@ -40,7 +41,7 @@ struct SideloadView: View {
         }
         .navigationTitle("Sideload")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { sideload.startServer() }
+        .onAppear { sideload.startServer(); sideload.refreshEnrollment() }
         .fileImporter(isPresented: $showFileImporter,
                       allowedContentTypes: ipaContentTypes,
                       allowsMultipleSelection: false) { result in
@@ -61,6 +62,12 @@ struct SideloadView: View {
             NavigationStack {
                 TrustView().environmentObject(sideload)
                     .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showTrust = false } } }
+            }
+        }
+        .sheet(isPresented: $showSignIn) {
+            NavigationStack {
+                SignInView().environmentObject(sideload)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showSignIn = false } } }
             }
         }
     }
@@ -86,17 +93,41 @@ struct SideloadView: View {
     }
 
     private var trustCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 12) {
-                SectionHeader(title: "First-run setup", systemImage: "lock.shield", tint: Aero.iris)
-                Text("Before the first install, trust Zeus's local certificate so iOS will accept the on-device install link.")
-                    .font(.aeroCaption)
-                    .foregroundStyle(Aero.textSecondary)
-                Button("Set up device trust") { showTrust = true }
-                    .buttonStyle(GlossyButtonStyle(
-                        gradient: LinearGradient(colors: [Aero.iris, Aero.signal], startPoint: .leading, endPoint: .trailing),
-                        glow: Aero.iris))
+        GlassCard(glow: sideload.signedIn ? Aero.aurora : Aero.iris) {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader(title: "Setup (once)", systemImage: "lock.shield", tint: Aero.iris)
+
+                setupRow(done: sideload.signedIn,
+                         title: sideload.signedIn ? "Signed in" : "Sign in with your developer account") {
+                    showSignIn = true
+                }
+                setupRow(done: sideload.udid != nil,
+                         title: sideload.udid != nil ? "Device enrolled" : "Enroll this device (get UDID)") {
+                    sideload.openEnroll()
+                }
+                setupRow(done: false, title: "Trust Zeus's certificate") { showTrust = true }
+
+                Text("Sign in + install the two profiles once. After that, every build you add is signed for your device and installed automatically — no importing.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Aero.textTertiary)
             }
+        }
+    }
+
+    private func setupRow(done: Bool, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(done ? Aero.aurora : Aero.textTertiary)
+                Text(title).font(.aeroBody).foregroundStyle(.white)
+                Spacer()
+                if !done {
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Aero.textTertiary)
+                }
+            }
+            .padding(.vertical, 9).padding(.horizontal, 12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.ultraThinMaterial))
         }
     }
 
