@@ -5,7 +5,9 @@ import SwiftUI
 /// there's nothing to type here.
 struct OnboardingView: View {
     @EnvironmentObject private var vehicle: VehicleManager
+    @EnvironmentObject private var sideload: SideloadModel
     @State private var signingIn = false
+    @State private var showSideload = false
 
     var body: some View {
         ZStack {
@@ -19,11 +21,15 @@ struct OnboardingView: View {
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(Aero.bolt, .white.opacity(0.15))
                         .shadow(color: Aero.bolt.opacity(0.7), radius: 24)
+                        // Hidden entry to the sideloader before sign-in: long-press
+                        // the icon to open it without logging in.
+                        .onLongPressGesture(minimumDuration: 0.6) { showSideload = true }
 
                     VStack(spacing: 6) {
                         Text("ZEUS")
                             .font(.aero(46, weight: .heavy))
                             .foregroundStyle(Aero.energyGradient)
+                            .onLongPressGesture(minimumDuration: 0.6) { showSideload = true }
                         Text("Command your Bolt")
                             .font(.aeroBody)
                             .foregroundStyle(Aero.textSecondary)
@@ -57,6 +63,17 @@ struct OnboardingView: View {
                     }
                 }
                 .padding(24)
+            }
+        }
+        .fullScreenCover(isPresented: $showSideload) {
+            NavigationStack {
+                SideloadView()
+                    .environmentObject(sideload)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showSideload = false }
+                        }
+                    }
             }
         }
     }
