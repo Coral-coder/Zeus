@@ -85,7 +85,7 @@ struct GitHubBrowserView: View {
     private func connect() {
         error = nil
         loading = true
-        KeychainStore.save(token, for: .githubToken)
+        try? KeychainStore.save(token, for: .githubToken)
         Task {
             defer { loading = false }
             do {
