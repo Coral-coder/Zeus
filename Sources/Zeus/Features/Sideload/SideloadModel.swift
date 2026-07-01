@@ -15,6 +15,10 @@ final class SideloadModel: ObservableObject {
     @Published var serverReady = false
     /// Flipped when an `.ipa` is opened into Zeus so the hidden panel can surface.
     @Published var presentSideload = false
+    /// Signed in with an App Store Connect API key (enables auto re-signing).
+    @Published var signedIn = SigningManager.shared.isSignedIn
+    /// The device UDID, once the enrollment profile has reported it.
+    @Published var udid: String?
 
     private let store = SideloadStore()
     private var server: LoopbackServer?
@@ -168,15 +172,68 @@ final class SideloadModel: ObservableObject {
         do {
             let resolved = try IPAReader.resolveIPA(data, name: name)
             let meta = try IPAReader.metadata(ipaData: resolved.data, fallbackName: resolved.name)
-            let install = try store.stage(ipaData: resolved.data, name: resolved.name,
+
+            // Re-sign with your developer account, if signed in and enrolled.
+            var ipaBytes = resolved.data
+            var signed = false
+            if SigningManager.shared.isSignedIn, let deviceUDID = enrollment.udid {
+                status = "Re-signing \(meta.title) for your device…"
+                do {
+                    ipaBytes = try await SigningManager.shared.resign(
+                        ipaData: ipaBytes, bundleID: meta.bundleID, udid: deviceUDID)
+                    signed = true
+                } catch {
+                    status = "Re-sign failed (\(error.localizedDescription)) — staging as-is."
+                }
+            }
+
+            let install = try store.stage(ipaData: ipaBytes, name: resolved.name,
                                           meta: meta, sourceLabel: source.label)
             installs = store.list()
-            status = "Ready: \(install.title) · \(install.bundleID)"
+            status = signed ? "Signed & ready: \(install.title)"
+                            : "Ready: \(install.title) · \(install.bundleID)"
             if server == nil { startServer() }
         } catch {
             status = "Failed: \(error.localizedDescription)"
         }
     }
+
+    // MARK: - Sign-in (App Store Connect API key) + device enrollment
+
+    func signIn(issuerID: String, keyID: String, p8: String, appleEmail: String) async {
+        busy = true
+        status = "Verifying your key…"
+        defer { busy = false }
+        let creds = ASCCredentials(
+            issuerID: issuerID.trimmingCharacters(in: .whitespacesAndNewlines),
+            keyID: keyID.trimmingCharacters(in: .whitespacesAndNewlines),
+            p8PEM: p8,
+            appleEmail: appleEmail.trimmingCharacters(in: .whitespacesAndNewlines))
+        do {
+            try SigningManager.shared.saveCredentials(creds)
+            try await SigningManager.shared.verify()
+            signedIn = true
+            status = "Signed in. Enroll your device, then add a build."
+        } catch {
+            SigningManager.shared.signOut()
+            signedIn = false
+            status = "Sign-in failed: \(error.localizedDescription)"
+        }
+    }
+
+    func signOut() {
+        SigningManager.shared.signOut()
+        signedIn = false
+    }
+
+    func openEnroll() {
+        if server == nil { startServer() }
+        guard let server, let url = URL(string: "\(server.baseURL)/enroll") else { return }
+        UIApplication.shared.open(url)
+    }
+
+    /// Pull the latest captured UDID into the published property for the UI.
+    func refreshEnrollment() { udid = enrollment.udid }
 
     // MARK: - Install / trust / delete
 
