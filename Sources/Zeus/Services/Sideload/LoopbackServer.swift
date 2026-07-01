@@ -9,6 +9,8 @@ import Security
 /// Only serves small, well-known GET routes; the router closure (owned by
 /// `SideloadModel`) resolves each one. Loopback-only + per-install tokens keep
 /// it off the LAN and gated.
+enum ServerError: Error { case badPort }
+
 final class LoopbackServer {
     let port: UInt16
     private var listener: NWListener?
@@ -33,9 +35,13 @@ final class LoopbackServer {
 
         let params = NWParameters(tls: tls)
         params.allowLocalEndpointReuse = true
-        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
+        // Bind the port on all local interfaces (loopback included). Pinning
+        // requiredLocalEndpoint to 127.0.0.1 makes the listener reach .ready but
+        // reject connections, so installd fetching https://127.0.0.1:PORT fails
+        // with "cannot connect". A plain port bind accepts the loopback fetch.
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { throw ServerError.badPort }
 
-        let listener = try NWListener(using: params)
+        let listener = try NWListener(using: params, on: nwPort)
         listener.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
