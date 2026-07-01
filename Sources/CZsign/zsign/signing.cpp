@@ -108,7 +108,10 @@ bool ZSign::SlotParseRequirements(uint8_t* pSlotBase, CS_BlobIndex* pbi)
 		return false;
 	}
 
-#ifndef _WIN32
+#if 0
+	// Debug-only pretty-print of the existing requirements slot via /usr/bin/csreq.
+	// Disabled: popen is unavailable on iOS and csreq never exists there. Re-signing
+	// builds a fresh requirements slot (SlotBuildRequirements), so this is cosmetic.
 	if (ZFile::IsFileExists("/usr/bin/csreq")) {
 		string strTempFile;
 		ZUtil::StringFormatV(strTempFile, "/tmp/Requirements_%llu.blob", ZUtil::GetMicroSecond());
