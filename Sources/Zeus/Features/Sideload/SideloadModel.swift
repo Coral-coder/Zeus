@@ -23,6 +23,8 @@ final class SideloadModel: ObservableObject {
     private let store = SideloadStore()
     private var server: LoopbackServer?
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
+    /// Silent-audio keep-alive so the server survives backgrounding (Safari/Settings/installd).
+    private let keepAlive = KeepAlive()
     /// Captures the device UDID reported by the enrollment profile (see DeviceEnrollment).
     let enrollment = UDIDCapture()
 
@@ -48,6 +50,7 @@ final class SideloadModel: ObservableObject {
             try server.start(identity: result.identity)
             self.server = server
             serverReady = true
+            keepAlive.start()   // keep the server alive while backgrounded
             status = "Local install server ready."
         } catch {
             serverReady = false
@@ -59,6 +62,7 @@ final class SideloadModel: ObservableObject {
         server?.stop()
         server = nil
         serverReady = false
+        keepAlive.stop()
         endBackground()
     }
 
