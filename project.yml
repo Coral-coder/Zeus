@@ -23,10 +23,15 @@ packages:
   swift-asn1:
     url: https://github.com/apple/swift-asn1
     from: "1.0.0"
+  # OpenSSL (precompiled xcframework) — the crypto zsign links against to
+  # re-sign apps on-device. App target only.
+  OpenSSL:
+    url: https://github.com/krzyzanowskim/OpenSSL
+    from: "3.1.5000"
 
 settings:
   base:
-    MARKETING_VERSION: "0.2.1"
+    MARKETING_VERSION: "0.3.0"
     CURRENT_PROJECT_VERSION: "1"
     VERSIONING_SYSTEM: "apple-generic"
     SWIFT_VERSION: "5.10"
@@ -61,6 +66,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Sources/Zeus/Resources/Zeus.entitlements
     dependencies:
       - target: ZeusWidgets
+      - target: CZsign
       - package: ZIPFoundation
       - package: swift-certificates
         product: X509
@@ -68,6 +74,33 @@ targets:
         product: Crypto
       - package: swift-asn1
         product: SwiftASN1
+      - package: OpenSSL
+        product: OpenSSL
+
+  # Vendored zsign (C/C++) that re-signs an extracted .app folder in-process,
+  # wrapped by an Objective-C++ bridge (ZsignBridge) that Swift imports.
+  CZsign:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/CZsign
+    settings:
+      base:
+        CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
+        CLANG_CXX_LIBRARY: "libc++"
+        GCC_C_LANGUAGE_STANDARD: "gnu11"
+        DEFINES_MODULE: YES
+        MODULEMAP_FILE: Sources/CZsign/include/module.modulemap
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Sources/CZsign/include"
+          - "$(SRCROOT)/Sources/CZsign/zsign"
+          - "$(SRCROOT)/Sources/CZsign/zsign/common"
+        # zsign is third-party C/C++; don't fail our build on its warnings.
+        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+        CLANG_WARN_DOCUMENTATION_COMMENTS: NO
+    dependencies:
+      - package: OpenSSL
+        product: OpenSSL
 
   ZeusWidgets:
     type: app-extension
