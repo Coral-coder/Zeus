@@ -59,12 +59,11 @@ bool  ZUtil::SystemExecV(const char* szCmd, ...)
 		return false;
 	}
 
-	int status = system(szRealCmd);
-	if (0 != status) {
-		ZLog::ErrorV("SystemExec: \"%s\", error!\n", szRealCmd);
-		return false;
-	}
-	return true;
+	// system() is unavailable on iOS. zsign only calls this for optional
+	// shell-outs (e.g. the -i install helper); the in-app signing path never
+	// hits it, so stub it out rather than link a banned API.
+	ZLog::ErrorV("SystemExec unsupported on iOS: \"%s\"\n", szRealCmd);
+	return false;
 }
 
 uint16_t ZUtil::Swap(uint16_t value)
