@@ -52,7 +52,11 @@
         <true/>
     </dict>
     <!-- Sideloader: let an .ipa opened from Files / Share / Safari downloads be
-         handed to Zeus (routed via onOpenURL to the hidden Sideload panel). -->
+         handed to Zeus (routed via onOpenURL to the hidden Sideload panel).
+         LSSupportsOpeningDocumentsInPlace declares how we open those files
+         (silences App Store warning ITMS-90737 for the document type below). -->
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
