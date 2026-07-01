@@ -97,27 +97,30 @@ struct SideloadView: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeader(title: "Setup (once)", systemImage: "lock.shield", tint: Aero.iris)
 
-                setupRow(done: sideload.signedIn,
+                setupRow(number: 1, done: sideload.signedIn,
                          title: sideload.signedIn ? "Signed in" : "Sign in with your developer account") {
                     showSignIn = true
                 }
-                setupRow(done: sideload.udid != nil,
+                // Trust MUST come before enrollment: the enroll profile posts the
+                // UDID back over HTTPS, and iOS validates Zeus's cert at that
+                // moment ("MDM server certificate invalid" if it isn't trusted).
+                setupRow(number: 2, done: false, title: "Trust Zeus's certificate") { showTrust = true }
+                setupRow(number: 3, done: sideload.udid != nil,
                          title: sideload.udid != nil ? "Device enrolled" : "Enroll this device (get UDID)") {
                     sideload.openEnroll()
                 }
-                setupRow(done: false, title: "Trust Zeus's certificate") { showTrust = true }
 
-                Text("Sign in + install the two profiles once. After that, every build you add is signed for your device and installed automatically — no importing.")
+                Text("Do these in order — Trust before Enroll (the enroll step needs the certificate trusted first). Then every build you add is signed for your device and installed automatically — no importing.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(Aero.textTertiary)
             }
         }
     }
 
-    private func setupRow(done: Bool, title: String, action: @escaping () -> Void) -> some View {
+    private func setupRow(number: Int, done: Bool, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                Image(systemName: done ? "checkmark.circle.fill" : "\(number).circle")
                     .foregroundStyle(done ? Aero.aurora : Aero.textTertiary)
                 Text(title).font(.aeroBody).foregroundStyle(.white)
                 Spacer()
