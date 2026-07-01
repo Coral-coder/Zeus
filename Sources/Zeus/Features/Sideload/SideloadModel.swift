@@ -239,6 +239,19 @@ final class SideloadModel: ObservableObject {
     /// Pull the latest captured UDID into the published property for the UI.
     func refreshEnrollment() { udid = enrollment.udid }
 
+    /// Manually set the device UDID (fallback when the enrollment profile is
+    /// rejected by iOS as an unsigned "Profile Service" — modern iOS does that).
+    func setManualUDID(_ raw: String) {
+        let u = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Accept the two common UDID shapes: 40-hex (older) or 8-4-… (newer).
+        let ok = u.range(of: "^[0-9a-f]{40}$", options: .regularExpression) != nil
+            || u.range(of: "^[0-9a-f]{8}-[0-9a-f]{16}$", options: .regularExpression) != nil
+        guard ok else { status = "That doesn't look like a UDID."; return }
+        enrollment.udid = u
+        udid = u
+        status = "Device UDID set — you can add a build now."
+    }
+
     // MARK: - Install / trust / delete
 
     func install(_ install: SideloadInstall) {
