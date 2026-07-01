@@ -2,7 +2,9 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject private var vehicle: VehicleManager
+    @EnvironmentObject private var sideload: SideloadModel
     @State private var showSettings = false
+    @State private var showSideload = false
 
     private var snap: VehicleSnapshot { vehicle.snapshot ?? .placeholder() }
 
@@ -46,6 +48,21 @@ struct HomeView: View {
                     }
             }
         }
+        .sheet(isPresented: $showSideload) {
+            NavigationStack {
+                SideloadView()
+                    .environmentObject(sideload)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showSideload = false }
+                        }
+                    }
+            }
+        }
+        // Surface the hidden panel automatically when an .ipa is opened into Zeus.
+        .onChange(of: sideload.presentSideload) { _, present in
+            if present { showSideload = true; sideload.presentSideload = false }
+        }
     }
 
     // MARK: - Header
@@ -56,6 +73,8 @@ struct HomeView: View {
                 Text("ZEUS")
                     .font(.aero(32, weight: .heavy))
                     .foregroundStyle(Aero.energyGradient)
+                    // Hidden entry to the on-device sideloader: long-press the logo.
+                    .onLongPressGesture(minimumDuration: 0.6) { showSideload = true }
                 Text(vehicle.selectedVehicle?.displayName ?? "Chevy Bolt")
                     .font(.aeroCaption)
                     .foregroundStyle(Aero.textSecondary)
@@ -166,5 +185,7 @@ struct HomeView: View {
 }
 
 #Preview {
-    HomeView().environmentObject(VehicleManager.shared)
+    HomeView()
+        .environmentObject(VehicleManager.shared)
+        .environmentObject(SideloadModel())
 }

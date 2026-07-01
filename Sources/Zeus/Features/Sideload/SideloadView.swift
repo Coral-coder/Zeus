@@ -1,0 +1,193 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// The hidden sideloader panel: stage an `.ipa` from any of four sources and
+/// install it over-the-air on this device. Reached by long-pressing the ZEUS
+/// logo on the home screen.
+struct SideloadView: View {
+    @EnvironmentObject private var sideload: SideloadModel
+
+    @State private var showFileImporter = false
+    @State private var showURLPrompt = false
+    @State private var urlText = ""
+    @State private var showTrust = false
+
+    private var ipaContentTypes: [UTType] {
+        if let t = UTType(filenameExtension: "ipa") { return [t] }
+        return [.data]
+    }
+
+    var body: some View {
+        ZStack {
+            AeroBackground(animated: false)
+
+            ScrollView {
+                VStack(spacing: 20) {
+                    statusCard
+                    trustCard
+                    sourcesCard
+                    if sideload.installs.isEmpty {
+                        emptyHint
+                    } else {
+                        installsCard
+                    }
+                    footnote
+                    Spacer(minLength: 8)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+            }
+        }
+        .navigationTitle("Sideload")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { sideload.startServer() }
+        .fileImporter(isPresented: $showFileImporter,
+                      allowedContentTypes: ipaContentTypes,
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                sideload.handleIncoming(url)
+            }
+        }
+        .alert("Install from URL", isPresented: $showURLPrompt) {
+            TextField("https://…/App.ipa", text: $urlText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Download") { let u = urlText; Task { await sideload.stageFromURL(u) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Paste a link to an .ipa (or a zip containing one).")
+        }
+        .sheet(isPresented: $showTrust) {
+            NavigationStack {
+                TrustView().environmentObject(sideload)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showTrust = false } } }
+            }
+        }
+    }
+
+    // MARK: - Sections
+
+    private var statusCard: some View {
+        GlassCard(glow: sideload.serverReady ? Aero.aurora : Aero.ember) {
+            HStack(spacing: 12) {
+                if sideload.busy { ProgressView().tint(Aero.bolt) }
+                VStack(alignment: .leading, spacing: 4) {
+                    StatusPill(text: sideload.serverReady ? "Server ready" : "Server off",
+                               systemImage: sideload.serverReady ? "checkmark.seal.fill" : "pause.circle.fill",
+                               color: sideload.serverReady ? Aero.aurora : Aero.ember)
+                    Text(sideload.status)
+                        .font(.aeroCaption)
+                        .foregroundStyle(Aero.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private var trustCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "First-run setup", systemImage: "lock.shield", tint: Aero.iris)
+                Text("Before the first install, trust Zeus's local certificate so iOS will accept the on-device install link.")
+                    .font(.aeroCaption)
+                    .foregroundStyle(Aero.textSecondary)
+                Button("Set up device trust") { showTrust = true }
+                    .buttonStyle(GlossyButtonStyle(
+                        gradient: LinearGradient(colors: [Aero.iris, Aero.signal], startPoint: .leading, endPoint: .trailing),
+                        glow: Aero.iris))
+            }
+        }
+    }
+
+    private var sourcesCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Add a build", systemImage: "tray.and.arrow.down.fill", tint: Aero.bolt)
+                Button { showFileImporter = true } label: {
+                    sourceRow("Choose an .ipa file", "folder.fill")
+                }
+                Button { urlText = ""; showURLPrompt = true } label: {
+                    sourceRow("Install from a URL", "link")
+                }
+                NavigationLink {
+                    GitHubBrowserView().environmentObject(sideload)
+                } label: {
+                    sourceRow("Browse GitHub artifacts", "shippingbox.fill")
+                }
+                Text("Or open an .ipa from Files / Share and choose Zeus.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Aero.textTertiary)
+            }
+        }
+    }
+
+    private func sourceRow(_ title: String, _ icon: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Aero.bolt)
+                .frame(width: 26)
+            Text(title).font(.aeroBody).foregroundStyle(.white)
+            Spacer()
+            Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(Aero.textTertiary)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.10)))
+    }
+
+    private var installsCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Staged builds", systemImage: "square.and.arrow.down.on.square.fill", tint: Aero.aurora)
+                ForEach(sideload.installs) { install in
+                    installRow(install)
+                }
+            }
+        }
+    }
+
+    private func installRow(_ install: SideloadInstall) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(install.title).font(.aero(17, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+            Text("\(install.bundleID) · v\(install.version) · \(sizeString(install.sizeBytes))")
+                .font(.aeroCaption).foregroundStyle(Aero.textSecondary).lineLimit(1)
+            HStack(spacing: 10) {
+                Button("Install") { sideload.install(install) }
+                    .buttonStyle(GlossyButtonStyle(gradient: Aero.chargeGradient, glow: Aero.aurora))
+                Button(role: .destructive) { sideload.delete(install) } label: {
+                    Image(systemName: "trash").font(.system(size: 16, weight: .semibold)).foregroundStyle(Aero.flare)
+                        .padding(12)
+                        .background(Circle().fill(.ultraThinMaterial))
+                        .overlay(Circle().strokeBorder(Aero.flare.opacity(0.5), lineWidth: 1))
+                }
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.10)))
+    }
+
+    private var emptyHint: some View {
+        Text("No builds staged yet.")
+            .font(.aeroCaption)
+            .foregroundStyle(Aero.textTertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+    }
+
+    private var footnote: some View {
+        Text("The .ipa must be signed for THIS device (Ad Hoc / Development with your UDID in the profile). Zeus serves it as-is — it does not re-sign.")
+            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .foregroundStyle(Aero.textTertiary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 4)
+    }
+
+    private func sizeString(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+}

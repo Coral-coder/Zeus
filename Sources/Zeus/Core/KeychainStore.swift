@@ -13,6 +13,7 @@ enum KeychainStore {
         case gmToken = "gm.token"
         case onStarConfig = "onstar.config"
         case commandPIN = "command.pin"
+        case githubToken = "github.token"
     }
 
     static func save<T: Encodable>(_ value: T, for key: Key) throws {
