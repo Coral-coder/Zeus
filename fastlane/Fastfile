@@ -34,26 +34,14 @@ platform :ios do
     end
     increment_build_number(xcodeproj: PROJECT, build_number: latest + 1)
 
-    # Apple caps Distribution certificates. Ephemeral runners mint a fresh one
-    # each run (the private key never persists), so we'd hit the cap. Revoke the
-    # stale ones first — their keys are gone so they can't sign, and revoking
-    # does NOT invalidate builds already on TestFlight.
+    # Never revoke certificates here: they're shared by every app on the team (this
+    # lane once revoked them all). CI uploads with .github/workflows/ios-testflight.yml.
     require "spaceship"
     Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
       key_id: key_id,
       issuer_id: issuer_id,
       filepath: File.expand_path(key_path)
     )
-    Spaceship::ConnectAPI::Certificate.all.each do |cert|
-      next unless cert.certificate_type.to_s.include?("DISTRIBUTION")
-
-      UI.message("Revoking stale distribution certificate #{cert.id} (#{cert.certificate_type})")
-      begin
-        cert.delete!
-      rescue StandardError => e
-        UI.important("Could not revoke #{cert.id}: #{e.message}")
-      end
-    end
 
     # Mint a Distribution certificate into the CI keychain, and an App Store
     # provisioning profile for each target (app + widget extension).
