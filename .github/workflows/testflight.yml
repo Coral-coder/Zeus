@@ -79,8 +79,11 @@ jobs:
           bundler-cache: true
 
       - name: Write App Store Connect API key
+        # Prefer ASC_KEY_P8 (propagated by Dev_deploy_setup's "Set up app repo"
+        # action, the shared source of truth); fall back to the legacy
+        # ASC_KEY_CONTENT name for older setups.
         env:
-          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_P8 || secrets.ASC_KEY_CONTENT }}
         run: |
           set -euo pipefail
           KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
