@@ -78,8 +78,7 @@ actor SmartcarClient {
     // MARK: - Setup / auth
 
     /// Persist the user's developer-app credentials (from Settings).
-    func saveConfig(clientId: String, clientSecret: String,
-                    redirectURI: String = Config.defaultRedirect) throws {
+    func saveConfig(clientId: String, clientSecret: String, redirectURI: String) throws {
         var cfg = config ?? Config(clientId: clientId, clientSecret: clientSecret,
                                    redirectURI: redirectURI, vehicleId: nil, vin: nil)
         cfg.clientId = clientId
