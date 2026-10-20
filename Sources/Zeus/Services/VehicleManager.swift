@@ -80,11 +80,13 @@ final class VehicleManager: ObservableObject {
     /// Connect the car through Smartcar's official OAuth API instead of OnStar.
     /// The user supplies their free Smartcar developer-app Client ID / Secret.
     func connectSmartcar(clientId: String, clientSecret: String) async {
-        let redirect = SmartcarClient.Config.defaultRedirect
+        let cid = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        let redirect = SmartcarClient.Config.redirect(for: cid)
         do {
             let url = try await service.smartcarAuthorizeURL(
-                clientId: clientId.trimmingCharacters(in: .whitespacesAndNewlines),
-                clientSecret: clientSecret.trimmingCharacters(in: .whitespacesAndNewlines),
+                clientId: cid,
+                clientSecret: secret,
                 redirect: redirect
             )
             let auth = SmartcarAuthSession(authorizeURL: url, redirectURI: redirect)

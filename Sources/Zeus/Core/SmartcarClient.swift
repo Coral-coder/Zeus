@@ -35,7 +35,12 @@ actor SmartcarClient {
         /// The VIN, resolved from Smartcar once connected (for display/parity).
         var vin: String?
 
-        static let defaultRedirect = "zeus://smartcar-callback"
+        /// Smartcar requires native-app redirect URIs of the form
+        /// `sc<clientId>://<hostname>`. We use `sc<clientId>://exchange`.
+        /// `ASWebAuthenticationSession` intercepts this scheme, so it needs no
+        /// Info.plist registration — but it MUST be registered on the Smartcar
+        /// dashboard for the app's Client ID.
+        static func redirect(for clientId: String) -> String { "sc\(clientId)://exchange" }
     }
 
     struct Token: Codable, Equatable {

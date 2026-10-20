@@ -56,7 +56,7 @@ struct SettingsView: View {
                                 } label: { Label("Switch back to OnStar", systemImage: "arrow.uturn.backward") }
                                     .buttonStyle(GlossyButtonStyle())
                             } else {
-                                Text("Smartcar is the official, more reliable vehicle API (EV status, lock/unlock, charge, location). Paste your free Smartcar developer-app keys to connect.")
+                                Text("Smartcar is the official, more reliable vehicle API (EV status, lock/unlock, charge, location). Create a free app at dashboard.smartcar.com, register the redirect URI  sc<ClientID>://exchange, then paste the keys here.")
                                     .font(.aeroCaption).foregroundStyle(Aero.textTertiary)
                                 TextField("Smartcar Client ID", text: $scClientId)
                                     .textInputAutocapitalization(.never)
