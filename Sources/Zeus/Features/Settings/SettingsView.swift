@@ -3,6 +3,9 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var vehicle: VehicleManager
     @State private var pin = ""
+    @State private var scClientId = ""
+    @State private var scSecret = ""
+    @State private var connectingSmartcar = false
 
     var body: some View {
         ZStack {
@@ -35,6 +38,48 @@ struct SettingsView: View {
                             if vehicle.vehicles.isEmpty {
                                 Text("No vehicles loaded yet.")
                                     .font(.aeroCaption).foregroundStyle(Aero.textTertiary)
+                            }
+                        }
+                    }
+
+                    // Connection method — OnStar (default) or the official
+                    // Smartcar API. Additive: OnStar stays the default.
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Connection").font(.aeroHeading).foregroundStyle(.white)
+                            Text("Active: \(vehicle.backend.displayName)")
+                                .font(.aeroCaption).foregroundStyle(Aero.textSecondary)
+
+                            if vehicle.backend == .smartcar {
+                                Button {
+                                    vehicle.setBackend(.onStar)
+                                } label: { Label("Switch back to OnStar", systemImage: "arrow.uturn.backward") }
+                                    .buttonStyle(GlossyButtonStyle())
+                            } else {
+                                Text("Smartcar is the official, more reliable vehicle API (EV status, lock/unlock, charge, location). Paste your free Smartcar developer-app keys to connect.")
+                                    .font(.aeroCaption).foregroundStyle(Aero.textTertiary)
+                                TextField("Smartcar Client ID", text: $scClientId)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .padding(12)
+                                    .background(RoundedRectangle(cornerRadius: 14).fill(.ultraThinMaterial))
+                                    .foregroundStyle(.white)
+                                SecureField("Smartcar Client Secret", text: $scSecret)
+                                    .padding(12)
+                                    .background(RoundedRectangle(cornerRadius: 14).fill(.ultraThinMaterial))
+                                    .foregroundStyle(.white)
+                                Button {
+                                    connectingSmartcar = true
+                                    Task {
+                                        await vehicle.connectSmartcar(clientId: scClientId, clientSecret: scSecret)
+                                        connectingSmartcar = false
+                                    }
+                                } label: {
+                                    Label(connectingSmartcar ? "Connecting…" : "Connect with Smartcar",
+                                          systemImage: "bolt.horizontal.circle.fill")
+                                }
+                                .buttonStyle(GlossyButtonStyle(gradient: Aero.chargeGradient, glow: Aero.aurora))
+                                .disabled(scClientId.isEmpty || scSecret.isEmpty || connectingSmartcar)
                             }
                         }
                     }

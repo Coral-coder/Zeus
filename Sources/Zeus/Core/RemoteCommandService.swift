@@ -10,6 +10,7 @@ actor RemoteCommandService {
     static let shared = RemoteCommandService()
 
     private let client = OnStarClient()
+    private let smartcar = SmartcarClient()
 
     private var vin: String? {
         KeychainStore.load(OnStarConfig.self, for: .onStarConfig)?.vin
@@ -17,7 +18,10 @@ actor RemoteCommandService {
     }
 
     var isAuthenticated: Bool {
-        get async { await client.isAuthenticated }
+        get async {
+            if ConnectionBackend.current == .smartcar { return await smartcar.isAuthenticated }
+            return await client.isAuthenticated
+        }
     }
 
     // MARK: - Auth
@@ -26,7 +30,26 @@ actor RemoteCommandService {
         try await client.login(using: provider)
     }
 
-    func signOut() async { await client.signOut() }
+    func signOut() async {
+        await client.signOut()
+        await smartcar.signOut()
+    }
+
+    // MARK: - Smartcar (official-API alternative)
+
+    /// Step 1 of Smartcar Connect: store the dev-app credentials and return the
+    /// hosted-login URL the app should present in `SmartcarAuthSession`.
+    func smartcarAuthorizeURL(clientId: String, clientSecret: String, redirect: String) async throws -> URL {
+        try await smartcar.saveConfig(clientId: clientId, clientSecret: clientSecret, redirectURI: redirect)
+        return try await smartcar.authorizeURL(state: UUID().uuidString)
+    }
+
+    /// Step 2: exchange the captured auth `code` for tokens and make Smartcar the
+    /// active backend.
+    func smartcarComplete(code: String) async throws {
+        try await smartcar.completeConnect(code: code)
+        ConnectionBackend.current = .smartcar
+    }
 
     // MARK: - Commands
 
@@ -34,6 +57,11 @@ actor RemoteCommandService {
     /// widgets reflect the new state immediately.
     @discardableResult
     func perform(_ command: VehicleCommand) async throws -> CommandResult {
+        if ConnectionBackend.current == .smartcar {
+            try await smartcar.perform(command)
+            applyOptimistic(command)
+            return CommandResult(command: command, status: .success, message: nil)
+        }
         guard let vin else { throw OnStarError.notConfigured }
         switch command {
         case .start:
@@ -55,12 +83,18 @@ actor RemoteCommandService {
     /// Pull fresh diagnostics and cache them.
     @discardableResult
     func refresh() async throws -> VehicleSnapshot {
+        if ConnectionBackend.current == .smartcar {
+            return mergeAndCache(try await smartcar.snapshot())
+        }
         guard let vin else { throw OnStarError.notConfigured }
         let snap = try await client.diagnostics(vin: vin)
         return mergeAndCache(snap)
     }
 
-    func vehicles() async throws -> [Vehicle] { try await client.vehicles() }
+    func vehicles() async throws -> [Vehicle] {
+        if ConnectionBackend.current == .smartcar { return try await smartcar.vehicles() }
+        return try await client.vehicles()
+    }
 
     // MARK: - Snapshot cache
 

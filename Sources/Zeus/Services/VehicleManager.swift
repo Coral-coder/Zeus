@@ -16,6 +16,8 @@ final class VehicleManager: ObservableObject {
     @Published private(set) var snapshot: VehicleSnapshot?
     @Published private(set) var busyCommand: VehicleCommand?
     @Published var lastError: String?
+    /// Which API Zeus is currently using to reach the car.
+    @Published var backend: ConnectionBackend = ConnectionBackend.current
 
     private let service = RemoteCommandService.shared
     private var config: OnStarConfig?
@@ -71,6 +73,37 @@ final class VehicleManager: ObservableObject {
         isAuthenticated = false
         vehicles = []
         snapshot = nil
+    }
+
+    // MARK: - Smartcar (official-API alternative)
+
+    /// Connect the car through Smartcar's official OAuth API instead of OnStar.
+    /// The user supplies their free Smartcar developer-app Client ID / Secret.
+    func connectSmartcar(clientId: String, clientSecret: String) async {
+        let redirect = SmartcarClient.Config.defaultRedirect
+        do {
+            let url = try await service.smartcarAuthorizeURL(
+                clientId: clientId.trimmingCharacters(in: .whitespacesAndNewlines),
+                clientSecret: clientSecret.trimmingCharacters(in: .whitespacesAndNewlines),
+                redirect: redirect
+            )
+            let auth = SmartcarAuthSession(authorizeURL: url, redirectURI: redirect)
+            let code = try await auth.authorizeCode()
+            try await service.smartcarComplete(code: code)
+            backend = .smartcar
+            isAuthenticated = true
+            await loadVehicles()
+            await refresh()
+        } catch {
+            present(error)
+        }
+    }
+
+    /// Switch the active connection backend (e.g. back to OnStar) and re-bootstrap.
+    func setBackend(_ newBackend: ConnectionBackend) {
+        ConnectionBackend.current = newBackend
+        backend = newBackend
+        Task { await bootstrap() }
     }
 
     private func loadVehicles() async {
