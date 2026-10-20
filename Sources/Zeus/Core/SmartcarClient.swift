@@ -141,15 +141,17 @@ actor SmartcarClient {
         guard let id = config?.vehicleId else { throw OnStarError.notConfigured }
         let vinValue = config?.vin ?? id
 
-        async let batteryR  = try? get(Battery.self,  "/vehicles/\(id)/battery")
-        async let chargeR   = try? get(Charge.self,   "/vehicles/\(id)/charge")
-        async let locationR = try? get(Location.self, "/vehicles/\(id)/location")
-        async let odoR      = try? get(Odometer.self, "/vehicles/\(id)/odometer")
+        async let batteryR  = get(Battery.self,  "/vehicles/\(id)/battery")
+        async let chargeR   = get(Charge.self,   "/vehicles/\(id)/charge")
+        async let locationR = get(Location.self, "/vehicles/\(id)/location")
+        async let odoR      = get(Odometer.self, "/vehicles/\(id)/odometer")
 
-        let battery = await batteryR
-        let charge = await chargeR
-        let location = await locationR
-        let odo = await odoR
+        // Tolerate per-endpoint failures (a scope the user didn't grant, etc.);
+        // `try?` belongs at the await site for `async let`, not the declaration.
+        let battery = try? await batteryR
+        let charge = try? await chargeR
+        let location = try? await locationR
+        let odo = try? await odoR
 
         let soc = battery?.percentRemaining ?? 0
         let charging = (charge?.state ?? "").uppercased() == "CHARGING"
