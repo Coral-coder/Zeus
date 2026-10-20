@@ -15,6 +15,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     var interfaceController: CPInterfaceController?
     private let ocm = OpenChargeMapClient()
+    /// Keeps the live-voltage dashboard ticking on the head unit.
+    private var dashboardTimer: Timer?
 
     func templateApplicationScene(_ scene: CPTemplateApplicationScene,
                                   didConnect interfaceController: CPInterfaceController) {
@@ -22,11 +24,23 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let tabs = CPTabBarTemplate(templates: [chargerTab(), dashboardTab()])
         interfaceController.setRootTemplate(tabs, animated: true, completion: nil)
         Task { await refreshChargers() }
+        startDashboardRefresh()
     }
 
     func templateApplicationScene(_ scene: CPTemplateApplicationScene,
                                   didDisconnectInterfaceController interfaceController: CPInterfaceController) {
         self.interfaceController = nil
+        dashboardTimer?.invalidate()
+        dashboardTimer = nil
+    }
+
+    /// Re-render the dashboard every couple of seconds so live OBD voltages
+    /// update on the car's screen while connected.
+    private func startDashboardRefresh() {
+        dashboardTimer?.invalidate()
+        dashboardTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.refreshDashboard()
+        }
     }
 
     // MARK: - Chargers tab
@@ -81,6 +95,29 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
 
     private func refreshDashboard() {
+        let obd = OBDManager.shared
+        var sections: [CPListSection] = []
+
+        // Live battery voltages first — the headline on the head unit. Ordered
+        // so HV pack + 12V + cell spread lead.
+        if obd.isConnected {
+            let order = ["0142", "ATRV", "22433C", "22433B", "2243AF", "2240D4", "22434F", "010D"]
+            let ordered = Set(order)
+            var rows: [CPListItem] = []
+            for cmd in order {
+                if let r = obd.readings[cmd] {
+                    rows.append(CPListItem(text: r.label, detailText: r.formatted))
+                }
+            }
+            for r in obd.latestReadable where !ordered.contains(r.command) {
+                rows.append(CPListItem(text: r.label, detailText: r.formatted))
+            }
+            if !rows.isEmpty {
+                sections.append(CPListSection(items: rows, header: "⚡️ Live Battery (OBD)", sectionIndexTitle: nil))
+            }
+        }
+
+        // OnStar snapshot summary (always available from the shared cache).
         let snap = SnapshotStore.load() ?? .placeholder()
         var rows: [CPListItem] = [
             CPListItem(text: "Battery", detailText: "\(Int(snap.batteryLevel * 100))%"),
@@ -88,19 +125,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             CPListItem(text: "Charging", detailText: snap.isCharging ? "Yes" : "No"),
             CPListItem(text: "Doors", detailText: snap.locked ? "Locked" : "Unlocked")
         ]
-        // Everything else OnStar reported.
-        let shown: Set<String> = ["Battery", "Range"]
-        for stat in snap.stats ?? [] where !shown.contains(stat.label) {
-            rows.append(CPListItem(text: stat.label, detailText: stat.value))
+        if let v = snap.voltage12V {
+            rows.append(CPListItem(text: "12V Battery", detailText: String(format: "%.1f V", v)))
         }
-        var sections = [CPListSection(items: rows, header: "OnStar", sectionIndexTitle: nil)]
+        sections.append(CPListSection(items: rows, header: "OnStar", sectionIndexTitle: nil))
 
-        // Live OBD parameters, when the reader is connected.
-        let live = OBDManager.shared.latestReadable
-        if !live.isEmpty {
-            let liveRows = live.map { CPListItem(text: $0.label, detailText: $0.formatted) }
-            sections.append(CPListSection(items: liveRows, header: "Live (OBD)", sectionIndexTitle: nil))
-        }
         dashboardTemplate.updateSections(sections)
     }
 }

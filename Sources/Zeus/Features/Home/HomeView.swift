@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// The Command screen — deliberately minimal: a glanceable battery hero, vehicle
+/// status, and the remote controls. Everything else (full telemetry, tires, trip
+/// data) lives one tap away on `VehicleDetailView`, so this page stays clean.
 struct HomeView: View {
     @EnvironmentObject private var vehicle: VehicleManager
     @EnvironmentObject private var sideload: SideloadModel
@@ -9,33 +12,32 @@ struct HomeView: View {
     private var snap: VehicleSnapshot { vehicle.snapshot ?? .placeholder() }
 
     var body: some View {
-        ZStack {
-            AeroBackground()
+        NavigationStack {
+            ZStack {
+                AeroBackground()
 
-            ScrollView {
-                VStack(spacing: 24) {
-                    header
+                ScrollView {
+                    VStack(spacing: 22) {
+                        header
+                        hero
 
-                    heroCard
+                        if !vehicle.isAuthenticated {
+                            reconnectCard
+                        } else if let error = vehicle.lastError {
+                            errorBanner(error)
+                        }
 
-                    CommandGrid()
+                        CommandGrid()
+                        detailsLink
 
-                    statsSections
-
-                    if let error = vehicle.lastError {
-                        Text(error)
-                            .font(.aeroCaption)
-                            .foregroundStyle(Aero.flare)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                        Spacer(minLength: 8)
                     }
-
-                    Spacer(minLength: 8)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
+                .refreshable { await vehicle.refresh() }
             }
-            .refreshable { await vehicle.refresh() }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack {
@@ -80,18 +82,6 @@ struct HomeView: View {
                     .foregroundStyle(Aero.textSecondary)
             }
             Spacer()
-            if let updated = vehicle.snapshot?.updatedAt {
-                Label {
-                    Text(updated, format: .relative(presentation: .named))
-                } icon: {
-                    Circle().fill(Aero.aurora).frame(width: 6, height: 6)
-                }
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(Aero.textSecondary)
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Capsule().fill(.ultraThinMaterial))
-                .overlay(Capsule().strokeBorder(.white.opacity(0.12)))
-            }
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 18, weight: .semibold))
@@ -103,48 +93,17 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Hero
+    // MARK: - Hero (glanceable battery only)
 
-    private var heroCard: some View {
+    private var hero: some View {
         GlassCard(glow: snap.isCharging ? Aero.aurora : Aero.bolt) {
-            VStack(spacing: 18) {
+            VStack(spacing: 16) {
                 EnergyRing(level: snap.batteryLevel,
                            rangeMiles: snap.rangeMiles,
                            isCharging: snap.isCharging)
-
-                if !heroMetrics.isEmpty {
-                    HStack(spacing: 10) {
-                        ForEach(heroMetrics, id: \.label) { m in
-                            MetricChip(value: m.value, label: m.label,
-                                       systemImage: m.icon, tint: m.tint)
-                        }
-                    }
-                }
-
                 statusRow
             }
         }
-    }
-
-    private struct Metric { let value: String; let label: String; let icon: String; let tint: Color }
-
-    private var heroMetrics: [Metric] {
-        var out: [Metric] = []
-        if let r = snap.rangeMiles {
-            out.append(Metric(value: "\(r) mi", label: "Range", icon: "road.lanes", tint: Aero.bolt))
-        }
-        if snap.isCharging, let m = snap.minutesToFull, m > 0 {
-            out.append(Metric(value: "\(m/60)h \(m%60)m", label: "To Full",
-                              icon: "bolt.fill", tint: Aero.aurora))
-        } else if let v = snap.voltage12V {
-            out.append(Metric(value: String(format: "%.1f V", v), label: "12V Batt",
-                              icon: "minus.plus.batteryblock.fill", tint: Aero.ember))
-        }
-        if let odo = snap.odometerMiles {
-            out.append(Metric(value: odo.formatted(), label: "Odometer",
-                              icon: "gauge.with.dots.needle.bottom.50percent", tint: Aero.iris))
-        }
-        return Array(out.prefix(3))
     }
 
     private var statusRow: some View {
@@ -161,26 +120,67 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Stats
+    // MARK: - Details entry (information lives here, not on the main page)
 
-    private var statsSections: some View {
-        let all = snap.stats ?? []
-        let tires = all.filter { $0.label.lowercased().contains("tire") }
-        let rest = all.filter { !$0.label.lowercased().contains("tire") }
-        return VStack(alignment: .leading, spacing: 24) {
-            if !rest.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "Telemetry", systemImage: "waveform.path.ecg", tint: Aero.bolt)
-                    StatGrid(stats: rest)
+    private var detailsLink: some View {
+        NavigationLink {
+            VehicleDetailView()
+                .environmentObject(vehicle)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "chart.bar.doc.horizontal.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Aero.bolt)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Vehicle details")
+                        .font(.aeroBody).foregroundStyle(.white)
+                    if let updated = vehicle.snapshot?.updatedAt {
+                        Text(updated, format: .relative(presentation: .named))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Aero.textTertiary)
+                    }
                 }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(Aero.textTertiary)
             }
-            if !tires.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "Tire Pressure", systemImage: "car.side", tint: Aero.aurora)
-                    StatGrid(stats: tires)
-                }
+            .padding(14)
+            .aeroGlass(cornerRadius: 18)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Session / error states (no more permanent red strip)
+
+    private var reconnectCard: some View {
+        GlassCard(glow: Aero.ember) {
+            VStack(spacing: 12) {
+                Label("OnStar session expired", systemImage: "link.badge.plus")
+                    .font(.aeroHeading).foregroundStyle(.white)
+                Text("Reconnect to resume live status and commands.")
+                    .font(.aeroCaption).foregroundStyle(Aero.textSecondary)
+                    .multilineTextAlignment(.center)
+                Button {
+                    Task { await vehicle.signIn() }
+                } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
+                    .buttonStyle(GlossyButtonStyle(gradient: Aero.chargeGradient, glow: Aero.aurora))
             }
         }
+    }
+
+    private func errorBanner(_ error: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Aero.flare)
+            Text(error)
+                .font(.aeroCaption).foregroundStyle(.white)
+                .lineLimit(2)
+            Spacer(minLength: 4)
+            Button { vehicle.lastError = nil } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(Aero.textTertiary)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Aero.flare.opacity(0.4)))
     }
 }
 

@@ -17,6 +17,7 @@ struct LiveView: View {
                     statusCard
 
                     if obd.isConnected {
+                        voltageHero
                         liveReadings
                     } else if case .scanning = obd.phase {
                         deviceList
@@ -121,6 +122,76 @@ struct LiveView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    // MARK: - Voltage hero (the headline: live battery voltages)
+
+    /// OBDManager keys readings by their command string. These are the Bolt's
+    /// voltage-related parameters.
+    private func reading(_ command: String) -> OBDReading? { obd.readings[command] }
+
+    private var voltageHero: some View {
+        GlassCard(glow: Aero.aurora) {
+            VStack(spacing: 16) {
+                // Headline: HV pack / module voltage.
+                let module = reading("0142")
+                VStack(spacing: 2) {
+                    Text("HV BATTERY")
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .tracking(2)
+                        .foregroundStyle(Aero.textSecondary)
+                    Text(module?.formatted ?? "— V")
+                        .font(.aero(52, weight: .heavy))
+                        .foregroundStyle(Aero.chargeGradient)
+                        .shadow(color: Aero.aurora.opacity(0.6), radius: 14)
+                        .contentTransition(.numericText())
+                        .monospacedDigit()
+                }
+
+                // Supporting voltages.
+                HStack(spacing: 10) {
+                    voltChip(reading("ATRV"), fallbackLabel: "12V Batt",
+                             icon: "minus.plus.batteryblock.fill", tint: Aero.ember)
+                    voltChip(reading("22433C"), fallbackLabel: "Max Cell",
+                             icon: "arrow.up.to.line.compact", tint: Aero.bolt)
+                    voltChip(reading("22433B"), fallbackLabel: "Min Cell",
+                             icon: "arrow.down.to.line.compact", tint: Aero.iris)
+                }
+
+                // Charge/discharge current + state of charge.
+                HStack(spacing: 10) {
+                    voltChip(reading("2243AF"), fallbackLabel: "Charge",
+                             icon: "battery.100", tint: Aero.aurora)
+                    voltChip(reading("2240D4"), fallbackLabel: "Current",
+                             icon: "bolt.fill", tint: Aero.flare)
+                }
+            }
+        }
+    }
+
+    private func voltChip(_ reading: OBDReading?, fallbackLabel: String,
+                          icon: String, tint: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 1) {
+                Text((reading?.label ?? fallbackLabel).uppercased())
+                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(Aero.textTertiary)
+                    .lineLimit(1)
+                Text(reading?.formatted ?? "—")
+                    .font(.aero(15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.6)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.12)))
     }
 
     private var liveReadings: some View {
