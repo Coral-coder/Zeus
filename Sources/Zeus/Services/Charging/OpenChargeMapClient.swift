@@ -15,9 +15,9 @@ struct OpenChargeMapClient {
     /// Connection type ids OCM uses for CCS / fast DC (level 3). We tag anything
     /// at 25kW+ as DC fast, otherwise Level 2.
     func stations(near coordinate: CLLocationCoordinate2D,
-                  radiusMiles: Double = 25,
+                  radiusMiles: Double = 50,
                   fastOnly: Bool = false,
-                  limit: Int = 60) async throws -> [ChargingStation] {
+                  limit: Int = 500) async throws -> [ChargingStation] {
         var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
         comps.queryItems = [
             .init(name: "key", value: apiKey),
@@ -61,6 +61,7 @@ struct OpenChargeMapClient {
                 address: address["AddressLine1"] as? String,
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
                 speed: speed,
+                kw: maxKW,
                 connectionCount: connections.count,
                 network: operatorInfo?["Title"] as? String,
                 isOperational: operational

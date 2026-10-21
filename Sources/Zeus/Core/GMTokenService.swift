@@ -27,9 +27,9 @@ struct GMTokenService {
 
     func randomState() -> String { Self.randomString(32) }
 
-    func authorizeURL(challenge: String, state: String) -> URL {
+    func authorizeURL(challenge: String, state: String, loginHint: String? = nil) -> URL {
         var comps = URLComponents(string: GMAPI.b2cAuthorizeBase + "/authorize")!
-        comps.queryItems = [
+        var items: [URLQueryItem] = [
             .init(name: "client_id", value: GMAPI.clientId),
             .init(name: "response_type", value: "code"),
             .init(name: "redirect_uri", value: GMAPI.redirectURI),
@@ -37,17 +37,30 @@ struct GMTokenService {
             .init(name: "code_challenge", value: challenge),
             .init(name: "code_challenge_method", value: "S256"),
             .init(name: "state", value: state),
-            .init(name: "response_mode", value: "query")
+            .init(name: "response_mode", value: "query"),
+            // Extra params the MyChevrolet app sends so the B2C policy themes and
+            // routes the page correctly (mirrors OnStarJS).
+            .init(name: "bundleID", value: "com.gm.myChevrolet"),
+            .init(name: "brand", value: "chevrolet"),
+            .init(name: "channel", value: "lightreg"),
+            .init(name: "ui_locales", value: "en-US"),
+            .init(name: "mode", value: "dark"),
+            .init(name: "evar25",
+                  value: "mobile_mychevrolet_chevrolet_us_app_launcher_sign_in_or_create_account")
         ]
+        if let loginHint, !loginHint.isEmpty {
+            items.append(.init(name: "login_hint", value: loginHint))
+        }
+        comps.queryItems = items
         return comps.url!
     }
 
     // MARK: - Exchanges
 
-    /// Trade an authorization code for a GM API token (via the MS id_token).
-    func exchange(code: String, verifier: String) async throws -> GMToken {
-        let msToken = try await exchangeCodeForMSToken(code: code, verifier: verifier)
-        return try await exchangeForGMToken(msIDToken: msToken)
+    /// Trade an authorization code for a GM API token (via the MS access token).
+    func exchange(code: String, verifier: String, deviceId: String) async throws -> GMToken {
+        let msAccessToken = try await exchangeCodeForMSToken(code: code, verifier: verifier)
+        return try await exchangeForGMToken(msAccessToken: msAccessToken, deviceId: deviceId)
     }
 
     func refresh(_ token: GMToken) async throws -> GMToken {
@@ -77,40 +90,63 @@ struct GMTokenService {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let http = resp as! HTTPURLResponse
         guard (200..<300).contains(http.statusCode) else {
-            throw OnStarError.tokenExchangeFailed(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw OnStarError.tokenExchangeFailed(http.statusCode, "MS-token: " + String(decoding: data, as: UTF8.self))
         }
+        // The GM API token-exchange wants the B2C *access* token (scoped to the
+        // custom Test.Read API scope), not the id_token. Prefer access_token.
         struct MSResponse: Decodable { let id_token: String?; let access_token: String? }
         let ms = try JSONDecoder().decode(MSResponse.self, from: data)
-        guard let token = ms.id_token ?? ms.access_token else {
+        guard let token = ms.access_token ?? ms.id_token else {
             throw OnStarError.authFailed("Microsoft token missing.")
         }
         return token
     }
 
-    private func exchangeForGMToken(msIDToken: String) async throws -> GMToken {
+    private func exchangeForGMToken(msAccessToken: String, deviceId: String) async throws -> GMToken {
         var req = URLRequest(url: GMAPI.gmTokenURL)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Mirrors OnStarJS getGMAPIToken exactly: the subject token is the MS
+        // *access* token, typed as access_token, with the device id. No client_id.
         req.httpBody = Self.form([
             "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-            "subject_token": msIDToken,
-            "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
-            "client_id": GMAPI.clientId,
-            "scope": "msso role_owner priv onstar gmoc user user_trailer"
+            "subject_token": msAccessToken,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "scope": "onstar gmoc user_trailer user msso priv",
+            "device_id": deviceId
         ])
-        return try await Self.parseGMToken(from: req)
+        return try await Self.parseGMToken(from: req, label: "GM-token")
     }
 
-    private static func parseGMToken(from req: URLRequest) async throws -> GMToken {
+    private static func parseGMToken(from req: URLRequest, label: String = "GM-token") async throws -> GMToken {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let http = resp as! HTTPURLResponse
         guard (200..<300).contains(http.statusCode) else {
-            throw OnStarError.tokenExchangeFailed(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw OnStarError.tokenExchangeFailed(http.statusCode, label + ": " + String(decoding: data, as: UTF8.self))
         }
         struct GMResponse: Decodable {
             let access_token: String
             let refresh_token: String?
             let expires_in: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case access_token, refresh_token, expires_in
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                access_token = try c.decode(String.self, forKey: .access_token)
+                refresh_token = try c.decodeIfPresent(String.self, forKey: .refresh_token)
+                // GM sends expires_in as either a number or a quoted string.
+                if let n = try? c.decodeIfPresent(Int.self, forKey: .expires_in) {
+                    expires_in = n
+                } else if let s = try? c.decodeIfPresent(String.self, forKey: .expires_in) {
+                    expires_in = Int(s)
+                } else {
+                    expires_in = nil
+                }
+            }
         }
         do {
             let gm = try JSONDecoder().decode(GMResponse.self, from: data)
@@ -120,7 +156,7 @@ struct GMTokenService {
                 expiresAt: Date().addingTimeInterval(TimeInterval(gm.expires_in ?? 1800))
             )
         } catch {
-            throw OnStarError.decoding(error.localizedDescription)
+            throw OnStarError.decoding("\(label): \(error.localizedDescription) — body: " + Self.snippet(data))
         }
     }
 
@@ -129,6 +165,12 @@ struct GMTokenService {
     static func queryItem(_ url: URL, _ name: String) -> String? {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == name })?.value
+    }
+
+    /// A short, log-safe excerpt of a response body for error messages.
+    static func snippet(_ data: Data, max: Int = 300) -> String {
+        let s = String(decoding: data, as: UTF8.self)
+        return s.count > max ? String(s.prefix(max)) + "…" : s
     }
 
     private static func codeVerifier() -> String {

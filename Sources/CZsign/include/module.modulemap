@@ -1,0 +1,4 @@
+module CZsign {
+    header "ZsignBridge.h"
+    export *
+}

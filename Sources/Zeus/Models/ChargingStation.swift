@@ -17,14 +17,36 @@ struct ChargingStation: Identifiable, Hashable {
         }
     }
 
+    /// The charging network/operator, normalized for filtering & coloring.
+    enum Network: String, CaseIterable {
+        case tesla = "Tesla"
+        case chargePoint = "ChargePoint"
+        case evgo = "EVgo"
+        case electrifyAmerica = "Electrify America"
+        case other = "Other"
+
+        static func from(_ raw: String?) -> Network {
+            let s = (raw ?? "").lowercased()
+            if s.contains("tesla") { return .tesla }
+            if s.contains("chargepoint") || s.contains("charge point") { return .chargePoint }
+            if s.contains("evgo") || s.contains("ev go") { return .evgo }
+            if s.contains("electrify") { return .electrifyAmerica }
+            return .other
+        }
+    }
+
     let id: Int
     let name: String
     let address: String?
     let coordinate: CLLocationCoordinate2D
     let speed: Speed
+    let kw: Double
     let connectionCount: Int
     let network: String?
     let isOperational: Bool
+
+    var networkKind: Network { Network.from(network) }
+    var isTesla: Bool { networkKind == .tesla }
 
     func distance(from origin: CLLocationCoordinate2D) -> CLLocationDistance {
         CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)

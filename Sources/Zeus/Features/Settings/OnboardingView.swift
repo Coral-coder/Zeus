@@ -1,32 +1,35 @@
 import SwiftUI
 
-/// First-run flow: collect the GM account email, password, VIN, and TOTP secret,
-/// then run the on-device OnStar (Azure B2C + TOTP) login.
+/// First-run flow: a single tap opens GM's official OnStar login on-device.
+/// We read the account's vehicle (and VIN) automatically after sign-in, so
+/// there's nothing to type here.
 struct OnboardingView: View {
     @EnvironmentObject private var vehicle: VehicleManager
-    @State private var email = ""
-    @State private var password = ""
-    @State private var vin = ""
-    @State private var totpSecret = ""
+    @EnvironmentObject private var sideload: SideloadModel
     @State private var signingIn = false
+    @State private var showSideload = false
 
     var body: some View {
         ZStack {
             AeroBackground()
             ScrollView {
                 VStack(spacing: 26) {
-                    Spacer(minLength: 40)
+                    Spacer(minLength: 60)
 
                     Image(systemName: "bolt.car.circle.fill")
-                        .font(.system(size: 76))
+                        .font(.system(size: 86))
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(Aero.bolt, .white.opacity(0.15))
                         .shadow(color: Aero.bolt.opacity(0.7), radius: 24)
+                        // Hidden entry to the sideloader before sign-in: long-press
+                        // the icon to open it without logging in.
+                        .onLongPressGesture(minimumDuration: 0.6) { showSideload = true }
 
                     VStack(spacing: 6) {
                         Text("ZEUS")
                             .font(.aero(46, weight: .heavy))
                             .foregroundStyle(Aero.energyGradient)
+                            .onLongPressGesture(minimumDuration: 0.6) { showSideload = true }
                         Text("Command your Bolt")
                             .font(.aeroBody)
                             .foregroundStyle(Aero.textSecondary)
@@ -34,31 +37,21 @@ struct OnboardingView: View {
 
                     GlassCard {
                         VStack(spacing: 16) {
-                            field("OnStar Email", text: $email, icon: "envelope.fill")
-                                .keyboardType(.emailAddress)
-                                .textInputAutocapitalization(.never)
-                            secureField("Password", text: $password, icon: "lock.fill")
-                            field("VIN", text: $vin, icon: "number")
-                                .textInputAutocapitalization(.characters)
-                            secureField("TOTP Secret (authenticator key)", text: $totpSecret, icon: "key.fill")
-                                .textInputAutocapitalization(.characters)
-
                             Button {
                                 start()
                             } label: {
                                 if signingIn {
                                     ProgressView().tint(.white)
                                 } else {
-                                    Label("Link OnStar Account", systemImage: "link")
+                                    Label("Sign in with OnStar", systemImage: "link")
                                 }
                             }
                             .buttonStyle(GlossyButtonStyle())
-                            .disabled(!canSubmit || signingIn)
-                            .opacity(canSubmit ? 1 : 0.5)
+                            .disabled(signingIn)
                         }
                     }
 
-                    Text("Zeus signs in to OnStar on-device using your account and the TOTP key from your authenticator-app MFA. Credentials are stored only in your iPhone's Keychain. Unofficial; for personal use with your own vehicle.")
+                    Text("Tapping Sign in opens GM's official OnStar login on-device. Sign in with your email, password, and MFA — Zeus never sees your password and reads your vehicle automatically. Unofficial; for personal use with your own vehicle.")
                         .font(.aeroCaption)
                         .foregroundStyle(Aero.textTertiary)
                         .multilineTextAlignment(.center)
@@ -72,50 +65,24 @@ struct OnboardingView: View {
                 .padding(24)
             }
         }
-    }
-
-    private var canSubmit: Bool {
-        email.contains("@")
-            && !password.isEmpty
-            && vin.trimmingCharacters(in: .whitespaces).count == 17
-            && totpSecret.trimmingCharacters(in: .whitespaces).count >= 16
+        .fullScreenCover(isPresented: $showSideload) {
+            NavigationStack {
+                SideloadView()
+                    .environmentObject(sideload)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showSideload = false }
+                        }
+                    }
+            }
+        }
     }
 
     private func start() {
         signingIn = true
         Task {
-            do {
-                try vehicle.saveConfig(email: email.trimmingCharacters(in: .whitespaces),
-                                       password: password,
-                                       vin: vin.trimmingCharacters(in: .whitespaces),
-                                       totpSecret: totpSecret)
-            } catch { }
             await vehicle.signIn()
             signingIn = false
         }
-    }
-
-    private func field(_ placeholder: String, text: Binding<String>, icon: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).foregroundStyle(Aero.bolt).frame(width: 22)
-            TextField("", text: text, prompt: Text(placeholder).foregroundColor(Aero.textTertiary))
-                .foregroundStyle(.white)
-                .autocorrectionDisabled()
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.15)))
-    }
-
-    private func secureField(_ placeholder: String, text: Binding<String>, icon: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).foregroundStyle(Aero.bolt).frame(width: 22)
-            SecureField("", text: text, prompt: Text(placeholder).foregroundColor(Aero.textTertiary))
-                .foregroundStyle(.white)
-                .autocorrectionDisabled()
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.15)))
     }
 }

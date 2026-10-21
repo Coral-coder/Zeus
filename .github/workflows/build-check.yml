@@ -1,0 +1,63 @@
+name: Build check
+
+# Fast, signing-free compile check for the sideloader work. Builds the app for
+# the iOS Simulator with code signing disabled, so it needs no secrets and does
+# not touch the distribution certificates the TestFlight lane manages. Runs on
+# pushes to the sideloader branch and on demand.
+
+on:
+  push:
+    branches:
+      - claude/standby-prompt-0sz5b8
+  workflow_dispatch:
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile (simulator, no signing)
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      LC_ALL: en_US.UTF-8
+      LANG: en_US.UTF-8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Write stub Secrets.plist
+        run: |
+          set -euo pipefail
+          PL="Sources/Zeus/Resources/Secrets.plist"
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+            echo '<plist version="1.0"><dict>'
+            echo '<key>OpenChargeMapKey</key><string></string>'
+            echo '</dict></plist>'
+          } > "$PL"
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build for simulator (no code signing)
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project Zeus.xcodeproj \
+            -scheme Zeus \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
