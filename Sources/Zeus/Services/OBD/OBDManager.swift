@@ -64,6 +64,27 @@ final class OBDManager: NSObject, ObservableObject {
     @Published private(set) var discovered: [OBDDevice] = []
     @Published private(set) var readings: [String: OBDReading] = [:]
 
+    /// Per-cell HV battery voltages (index 0 = cell 1). 0 = not read yet.
+    @Published private(set) var cellVoltages: [Double] = Array(repeating: 0, count: 96)
+    /// True while a full 96-cell sweep is in flight.
+    @Published private(set) var cellSweepActive = false
+    private var cellRepliesRemaining = 0
+
+    /// Number of cells that have returned a plausible reading.
+    var cellsReadCount: Int { cellVoltages.reduce(0) { $0 + ($1 > 0 ? 1 : 0) } }
+
+    /// The Bolt's 96 cell-voltage PIDs (from the OVMS `vehicle_boltev` driver):
+    /// mode-22 addressed to the pack controller at header 7E7 — cells 1–31 at
+    /// 0x4181–0x419F, cells 32–96 at 0x4200–0x4240. Voltage = 5 · (hi<<8|lo)/65535.
+    /// Community-sourced; verify against your car/model year.
+    static let cellPIDs: [(request: String, index: Int)] = {
+        var out: [(request: String, index: Int)] = []
+        var idx = 0
+        for pid in 0x4181...0x419F { out.append((String(format: "22%04X", pid), idx)); idx += 1 }
+        for pid in 0x4200...0x4240 { out.append((String(format: "22%04X", pid), idx)); idx += 1 }
+        return out
+    }()
+
     var isConnected: Bool {
         if case .live = phase { return true }
         if case .initializing = phase { return true }
@@ -314,6 +335,38 @@ final class OBDManager: NSObject, ObservableObject {
               let value = pid.decode(bytes) else { return }
         readings[pid.request] = OBDReading(command: pid.request, label: pid.label,
                                            value: value, unit: pid.unit, systemImage: pid.icon)
+    }
+
+    // MARK: - Per-cell voltage sweep
+
+    /// Read all 96 individual cell voltages (one request each) and fill
+    /// `cellVoltages`. Heavy, so it runs on demand (e.g. when the cell grid is
+    /// open) rather than every poll cycle.
+    func requestCellSweep() {
+        guard isConnected, !cellSweepActive else { return }
+        cellSweepActive = true
+        cellRepliesRemaining = Self.cellPIDs.count
+        // Address the pack controller that serves per-cell data (OVMS: 7E7).
+        lastHeader = "7E7"
+        enqueue("ATSH7E7") { _ in }
+        for cell in Self.cellPIDs {
+            let index = cell.index
+            let request = cell.request
+            enqueue(request) { [weak self] reply in
+                Task { @MainActor in self?.handleCellReply(index: index, request: request, reply: reply) }
+            }
+        }
+    }
+
+    private func handleCellReply(index: Int, request: String, reply: String) {
+        defer {
+            cellRepliesRemaining -= 1
+            if cellRepliesRemaining <= 0 { cellSweepActive = false }
+        }
+        guard let b = Self.dataBytes(from: reply, request: request), b.count >= 2 else { return }
+        let volts = 5 * (Double(b[0]) * 256 + Double(b[1])) / 65535
+        guard volts > 1.5, volts < 5.0, index < cellVoltages.count else { return }
+        cellVoltages[index] = volts
     }
 
     /// Extract the data bytes from an ELM327 reply for a given request, handling

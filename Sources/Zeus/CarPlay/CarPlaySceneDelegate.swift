@@ -112,6 +112,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             for r in obd.latestReadable where !ordered.contains(r.command) {
                 rows.append(CPListItem(text: r.label, detailText: r.formatted))
             }
+            // Cell spread (weakest-to-strongest), the key pack-health number.
+            // CarPlay can't draw the full 96-cell grid — that lives in the app;
+            // here we surface the headline cell metrics.
+            if let mx = obd.readings["22433C"]?.value, let mn = obd.readings["22433B"]?.value {
+                rows.append(CPListItem(text: "Cell Spread", detailText: "\(Int(((mx - mn) * 1000).rounded())) mV"))
+            }
             if !rows.isEmpty {
                 sections.append(CPListSection(items: rows, header: "⚡️ Live Battery (OBD)", sectionIndexTitle: nil))
             }

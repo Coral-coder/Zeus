@@ -9,6 +9,7 @@ struct LiveView: View {
                            GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
+        NavigationStack {
         ZStack {
             AeroBackground()
             ScrollView {
@@ -18,6 +19,7 @@ struct LiveView: View {
 
                     if obd.isConnected {
                         voltageHero
+                        cellsLink
                         liveReadings
                     } else if case .scanning = obd.phase {
                         deviceList
@@ -28,6 +30,27 @@ struct LiveView: View {
                 .padding(20)
             }
         }
+        }
+    }
+
+    // Link to the full 96-cell red→green grid.
+    private var cellsLink: some View {
+        NavigationLink {
+            BatteryCellsView()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "square.grid.3x3.fill").foregroundStyle(Aero.bolt)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("All 96 cells").font(.aeroBody).foregroundStyle(.white)
+                    Text("Red → green voltage grid").font(.aeroCaption).foregroundStyle(Aero.textTertiary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(Aero.textTertiary)
+            }
+            .padding(14)
+            .aeroGlass(cornerRadius: 18)
+        }
+        .buttonStyle(.plain)
     }
 
     private var header: some View {
